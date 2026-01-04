@@ -3,18 +3,75 @@ Main FastAPI Application
 
 Initializes the Third Wheel backend with all routes,
 middleware, and configuration.
+
+Key Features:
+- CamelCase response serialization for frontend compatibility
+- CORS configuration for development and production
+- Automatic database table creation
+- LLM service integration
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
+import json
 
 from app.config.settings import settings
 from app.db.database import engine, Base
-from app.api.routes import users, sessions, checkins, websocket, groups
+from app.api.routes import users, sessions, checkins, websocket, groups, notifications
 from app.utils.logger import get_logger
+from app.utils.serializers import convert_keys_to_camel
 
 logger = get_logger(__name__)
+
+
+class CamelCaseMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to convert JSON response keys from snake_case to camelCase.
+
+    This ensures frontend compatibility without changing internal Python conventions.
+    Only applies to JSON responses, not WebSocket or other content types.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # Only process JSON responses
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return response
+
+        # Read and transform response body
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+
+        if body:
+            try:
+                # Parse JSON, convert keys, and re-serialize
+                data = json.loads(body)
+                camel_data = convert_keys_to_camel(data)
+                new_body = json.dumps(camel_data)
+
+                # Create new response with transformed body
+                return Response(
+                    content=new_body,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type="application/json"
+                )
+            except json.JSONDecodeError:
+                # If not valid JSON, return original
+                return Response(
+                    content=body,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=content_type
+                )
+
+        return response
 
 
 @asynccontextmanager
@@ -69,6 +126,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add camelCase middleware for JSON responses
+# Note: Middleware order matters - CamelCase runs after CORS
+app.add_middleware(CamelCaseMiddleware)
+
 # Register API routes
 app.include_router(
     users.router,
@@ -92,6 +153,12 @@ app.include_router(
     checkins.router,
     prefix="/api/checkins",
     tags=["checkins"]
+)
+
+app.include_router(
+    notifications.router,
+    prefix="/api/notifications",
+    tags=["notifications"]
 )
 
 app.include_router(

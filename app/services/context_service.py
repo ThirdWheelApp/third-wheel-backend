@@ -12,17 +12,116 @@ from app.db.models import (
     PrivateUserContext,
     GroupContext
 )
-from anthropic import Anthropic
 from app.config.settings import settings
+from app.demo import get_llm_client
 from app.config.prompts import (
     CONTEXT_EXTRACTION_SYSTEM_PROMPT,
     CONTEXT_EXTRACTION_PROMPT_TEMPLATE,
     format_messages_for_llm
 )
+from app.utils.logger import get_logger
 import uuid
 import json
+import re
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+logger = get_logger(__name__)
+
+
+# Secret level indicators in user messages
+# Phrases that indicate higher sensitivity levels
+SECRET_INDICATORS = [
+    ("super secret", 9),
+    ("don't tell anyone", 9),
+    ("this is a secret", 8),
+    ("please don't share", 8),
+    ("between us", 7),
+    ("don't tell", 7),
+    ("keep this private", 7),
+    ("confidential", 6),
+    ("private", 6),
+    ("just between you and me", 8),
+]
+
+
+def detect_secret_level_boost(message: str) -> int:
+    """
+    Detect if user message indicates sensitivity.
+
+    Scans message for phrases that indicate the user wants
+    information to be kept private.
+
+    Args:
+        message: User's message text
+
+    Returns:
+        Secret level boost (0-9), 0 if no indicators found
+    """
+    message_lower = message.lower()
+    max_boost = 0
+
+    for phrase, level in SECRET_INDICATORS:
+        if phrase in message_lower:
+            max_boost = max(max_boost, level)
+
+    return max_boost
+
+
+def extract_json_from_response(response_text: str) -> Optional[Dict]:
+    """
+    Extract JSON from LLM response text.
+
+    Handles multiple formats:
+    1. Raw JSON object
+    2. JSON in markdown code blocks (```json ... ```)
+    3. JSON embedded in text
+
+    Args:
+        response_text: Raw response from LLM
+
+    Returns:
+        Parsed JSON dictionary or None if parsing fails
+    """
+    # Try 1: Direct JSON parse
+    try:
+        return json.loads(response_text.strip())
+    except json.JSONDecodeError:
+        pass
+
+    # Try 2: Extract from markdown code block
+    code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+    if code_block_match:
+        try:
+            return json.loads(code_block_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Try 3: Find JSON object in text (greedy match for outermost braces)
+    # Use a more careful approach - count braces to find complete JSON
+    start_idx = response_text.find('{')
+    if start_idx == -1:
+        return None
+
+    brace_count = 0
+    end_idx = start_idx
+
+    for i, char in enumerate(response_text[start_idx:], start=start_idx):
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                end_idx = i + 1
+                break
+
+    if brace_count == 0:
+        try:
+            return json.loads(response_text[start_idx:end_idx])
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 class ContextService:
@@ -38,7 +137,7 @@ class ContextService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = get_llm_client()
 
     async def extract_context_from_session(self, session_id: str) -> Dict:
         """
@@ -95,20 +194,20 @@ class ContextService:
 
             response_text = response.content[0].text
 
-            # Parse JSON response
-            # Try to extract JSON from response
-            import re
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                extracted_data = json.loads(json_match.group())
-            else:
-                print(f"Could not parse JSON from LLM response: {response_text}")
+            # Parse JSON response using robust extraction
+            extracted_data = extract_json_from_response(response_text)
+
+            if extracted_data is None:
+                logger.error(f"Could not parse JSON from LLM response: {response_text[:500]}...")
                 extracted_data = {
                     'user_a_contexts': [],
                     'user_b_contexts': [],
                     'group_contexts': [],
                     'check_ins': []
                 }
+
+            # Apply secret level boosts based on user messages
+            self._apply_secret_level_boosts(extracted_data, messages)
 
             # Save contexts to database
             await self._save_contexts(
@@ -119,7 +218,7 @@ class ContextService:
             return extracted_data
 
         except Exception as e:
-            print(f"Error extracting context: {e}")
+            logger.error(f"Error extracting context: {e}", exc_info=True)
             return {
                 'user_a_contexts': [],
                 'user_b_contexts': [],
@@ -128,60 +227,90 @@ class ContextService:
                 'error': str(e)
             }
 
+    def _apply_secret_level_boosts(self, extracted_data: Dict, messages: List) -> None:
+        """
+        Apply secret level boosts based on user message indicators.
+
+        If user said "this is a secret", boost the secret level of
+        contexts extracted from that conversation.
+        """
+        # Find max secret level boost from messages
+        max_boost = 0
+        for msg in messages:
+            if msg.sender_id != 'therapist':
+                boost = detect_secret_level_boost(msg.content)
+                max_boost = max(max_boost, boost)
+
+        # Apply boost to extracted contexts
+        if max_boost > 0:
+            for ctx in extracted_data.get('user_a_contexts', []):
+                current = ctx.get('secret_level', 5)
+                ctx['secret_level'] = min(10, max(current, max_boost))
+
+            for ctx in extracted_data.get('user_b_contexts', []):
+                current = ctx.get('secret_level', 5)
+                ctx['secret_level'] = min(10, max(current, max_boost))
+
     async def _save_contexts(
         self,
         session: SessionModel,
         extracted_data: Dict
     ):
         """Save extracted contexts to database."""
+        try:
+            # Save private contexts for User A
+            if len(session.participants) >= 1:
+                user_a_id = session.participants[0]
+                for ctx_data in extracted_data.get('user_a_contexts', []):
+                    context = PrivateUserContext(
+                        user_id=user_a_id,
+                        group_id=session.group_id,
+                        context_id=uuid.uuid4(),
+                        data={
+                            **ctx_data,
+                            'created_at': datetime.utcnow().isoformat(),
+                            'source_session_id': str(session.id)
+                        },
+                        created_at=datetime.utcnow()
+                    )
+                    self.db.add(context)
 
-        # Save private contexts for User A
-        if len(session.participants) >= 1:
-            user_a_id = session.participants[0]
-            for ctx_data in extracted_data.get('user_a_contexts', []):
-                context = PrivateUserContext(
-                    user_id=user_a_id,
+            # Save private contexts for User B
+            if len(session.participants) >= 2:
+                user_b_id = session.participants[1]
+                for ctx_data in extracted_data.get('user_b_contexts', []):
+                    context = PrivateUserContext(
+                        user_id=user_b_id,
+                        group_id=session.group_id,
+                        context_id=uuid.uuid4(),
+                        data={
+                            **ctx_data,
+                            'created_at': datetime.utcnow().isoformat(),
+                            'source_session_id': str(session.id)
+                        },
+                        created_at=datetime.utcnow()
+                    )
+                    self.db.add(context)
+
+            # Save group contexts
+            for ctx_data in extracted_data.get('group_contexts', []):
+                context = GroupContext(
                     group_id=session.group_id,
                     context_id=uuid.uuid4(),
                     data={
                         **ctx_data,
                         'created_at': datetime.utcnow().isoformat(),
-                        'source_session_id': str(session.id)
+                        'source_session_id': str(session.id),
+                        'participants': [str(p) for p in session.participants]
                     },
                     created_at=datetime.utcnow()
                 )
                 self.db.add(context)
 
-        # Save private contexts for User B
-        if len(session.participants) >= 2:
-            user_b_id = session.participants[1]
-            for ctx_data in extracted_data.get('user_b_contexts', []):
-                context = PrivateUserContext(
-                    user_id=user_b_id,
-                    group_id=session.group_id,
-                    context_id=uuid.uuid4(),
-                    data={
-                        **ctx_data,
-                        'created_at': datetime.utcnow().isoformat(),
-                        'source_session_id': str(session.id)
-                    },
-                    created_at=datetime.utcnow()
-                )
-                self.db.add(context)
+            self.db.commit()
+            logger.info(f"Saved contexts for session {session.id}")
 
-        # Save group contexts
-        for ctx_data in extracted_data.get('group_contexts', []):
-            context = GroupContext(
-                group_id=session.group_id,
-                context_id=uuid.uuid4(),
-                data={
-                    **ctx_data,
-                    'created_at': datetime.utcnow().isoformat(),
-                    'source_session_id': str(session.id),
-                    'participants': [str(p) for p in session.participants]
-                },
-                created_at=datetime.utcnow()
-            )
-            self.db.add(context)
-
-        self.db.commit()
+        except Exception as e:
+            logger.error(f"Error saving contexts: {e}", exc_info=True)
+            self.db.rollback()
+            raise

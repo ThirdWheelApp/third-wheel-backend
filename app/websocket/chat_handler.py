@@ -3,6 +3,8 @@ Chat WebSocket Handler
 
 Handles WebSocket messages for chat sessions.
 Coordinates with ChatService and broadcasts responses.
+
+All WebSocket messages use camelCase for frontend compatibility.
 """
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -10,7 +12,11 @@ from sqlalchemy.orm import Session
 from app.websocket.manager import manager
 from app.services.chat_service import ChatService
 from app.utils.message_queue import session_message_queue
+from app.utils.serializers import convert_keys_to_camel
+from app.utils.logger import get_logger
 import json
+
+logger = get_logger(__name__)
 
 
 class ChatHandler:
@@ -62,7 +68,7 @@ class ChatHandler:
         except WebSocketDisconnect:
             manager.disconnect(session_id, websocket)
         except Exception as e:
-            print(f"Error in WebSocket handler: {e}")
+            logger.error(f"Error in WebSocket handler: {e}", exc_info=True)
             manager.disconnect(session_id, websocket)
 
     async def _handle_message(
@@ -112,25 +118,29 @@ class ChatHandler:
         """
         Process a user message and get AI response.
 
+        Supports both streaming and non-streaming modes.
+        Client can request streaming by setting 'stream': true in message.
+
         Args:
-            data: Message data
+            data: Message data (may include 'stream': true for streaming)
             session_id: UUID of the session
             user_id: UUID of the user
             websocket: WebSocket connection
         """
         content = data.get('content', '')
+        use_streaming = data.get('stream', False)
 
         if not content.strip():
             return
 
         try:
-            # Broadcast that AI is typing
+            # Broadcast that AI is typing (using camelCase for frontend)
             await manager.broadcast(
                 session_id,
                 {
                     'type': 'typing',
-                    'user_id': 'therapist',
-                    'is_typing': True
+                    'userId': 'therapist',
+                    'isTyping': True
                 }
             )
 
@@ -149,41 +159,41 @@ class ChatHandler:
                 )
                 return
 
-            # Process through appropriate service
-            if session.type == 'private':
+            # Handle streaming for private sessions
+            if session.type == 'private' and use_streaming:
+                await self._process_streaming_message(
+                    session_id,
+                    user_id,
+                    content,
+                    websocket
+                )
+            elif session.type == 'private':
                 response = await self.chat_service.process_private_message(
                     session_id,
                     user_id,
                     content
                 )
-            else:  # joint
+                await self._broadcast_response(session_id, response)
+            else:  # joint (streaming not yet supported for joint due to LangGraph complexity)
                 response = await self.chat_service.process_joint_message(
                     session_id,
                     user_id,
                     content
                 )
+                await self._broadcast_response(session_id, response)
 
             # Stop typing indicator
             await manager.broadcast(
                 session_id,
                 {
                     'type': 'typing',
-                    'user_id': 'therapist',
-                    'is_typing': False
-                }
-            )
-
-            # Broadcast response
-            await manager.broadcast(
-                session_id,
-                {
-                    'type': 'message',
-                    **response
+                    'userId': 'therapist',
+                    'isTyping': False
                 }
             )
 
         except Exception as e:
-            print(f"Error processing message: {e}")
+            logger.error(f"Error processing message: {e}", exc_info=True)
             await manager.broadcast(
                 session_id,
                 {
@@ -191,6 +201,95 @@ class ChatHandler:
                     'message': 'Failed to process message'
                 }
             )
+
+    async def _process_streaming_message(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        websocket: WebSocket
+    ):
+        """
+        Process message with streaming response.
+
+        Sends tokens as they are generated for real-time display.
+
+        WebSocket streaming protocol:
+        1. {type: 'streamStart'} - Streaming begins
+        2. {type: 'streamToken', token: '...'} - Individual token
+        3. {type: 'streamEnd', messageId: '...', content: '...'} - Complete
+
+        Args:
+            session_id: UUID of the session
+            user_id: UUID of the user
+            content: Message content
+            websocket: WebSocket connection
+        """
+        import uuid as uuid_module
+
+        # Send stream start
+        await manager.broadcast(
+            session_id,
+            {
+                'type': 'streamStart',
+                'senderId': 'therapist',
+                'senderName': 'AI Therapist'
+            }
+        )
+
+        # Token callback for streaming
+        async def send_token(token: str):
+            await manager.broadcast(
+                session_id,
+                {
+                    'type': 'streamToken',
+                    'token': token
+                }
+            )
+
+        try:
+            # Process with streaming
+            response = await self.chat_service.process_private_message_stream(
+                session_id,
+                user_id,
+                content,
+                send_token
+            )
+
+            # Send stream end with final message
+            await manager.broadcast(
+                session_id,
+                {
+                    'type': 'streamEnd',
+                    'messageId': response['message_id'],
+                    'senderId': response['sender_id'],
+                    'senderName': response['sender_name'],
+                    'content': response['content'],
+                    'timestamp': response['timestamp'],
+                    'suggestEndSession': response.get('suggest_end_session', False)
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error in streaming message: {e}", exc_info=True)
+            await manager.broadcast(
+                session_id,
+                {
+                    'type': 'streamError',
+                    'message': 'Streaming failed'
+                }
+            )
+
+    async def _broadcast_response(self, session_id: str, response: dict):
+        """Broadcast a non-streaming response."""
+        camel_response = convert_keys_to_camel(response)
+        await manager.broadcast(
+            session_id,
+            {
+                'type': 'message',
+                **camel_response
+            }
+        )
 
     async def _send_sync_message(
         self,
@@ -221,18 +320,19 @@ class ChatHandler:
 
         messages.reverse()  # Chronological order
 
+        # Send sync message with camelCase keys for frontend
         await manager.send_personal_message(
             {
                 'type': 'sync',
-                'session_status': session.status,
+                'sessionStatus': session.status,
                 'messages': [
                     {
-                        'message_id': str(m.id),
-                        'sender_id': m.sender_id,
-                        'sender_name': m.sender_name,
+                        'messageId': str(m.id),
+                        'senderId': m.sender_id,
+                        'senderName': m.sender_name,
                         'content': m.content,
                         'timestamp': m.timestamp.isoformat(),
-                        'sequence_number': m.sequence_number
+                        'sequenceNumber': m.sequence_number
                     }
                     for m in messages
                 ]

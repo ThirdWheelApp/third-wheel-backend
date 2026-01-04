@@ -71,11 +71,12 @@ async def approve_checkin(
         current_user_id: Authenticated user ID from JWT
 
     Check-in becomes active when both parties approve.
+    Sends notification to assigned user when fully approved.
     """
     service = CheckInService(db)
 
     try:
-        checkin = service.approve_checkin(
+        checkin = await service.approve_checkin(
             checkin_id=checkin_id,
             user_id=current_user_id,
             role=approval_data.role
@@ -101,13 +102,13 @@ async def mark_checkin_done(
 
     Requires authentication.
     Increments progress counter.
-    If requires_verification, sets status to 'awaiting_verification'.
-    Otherwise, status remains 'active' until all occurrences complete.
+    If requires_verification, sets status to 'awaiting_verification'
+    and notifies the verifier.
     """
     service = CheckInService(db)
 
     try:
-        checkin = service.mark_checkin_done(checkin_id, current_user_id)
+        checkin = await service.mark_checkin_done(checkin_id, current_user_id)
 
         return {
             "success": True,
@@ -135,13 +136,13 @@ async def verify_checkin(
         verification_data: Contains status ('verified' or 'needs_work') and optional feedback
         current_user_id: Authenticated user ID from JWT (verifier)
 
-    If verified, check-in returns to 'active' status.
-    If needs_work, assigned user must redo it.
+    If verified, check-in returns to 'active' status and user is notified.
+    If needs_work, assigned user must redo it and is notified.
     """
     service = CheckInService(db)
 
     try:
-        checkin = service.verify_checkin(
+        checkin = await service.verify_checkin(
             checkin_id=checkin_id,
             verified_by=current_user_id,
             status=verification_data.status,

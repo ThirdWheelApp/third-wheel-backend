@@ -5,11 +5,11 @@ Defines the state machine that orchestrates the joint therapy session.
 Uses LangGraph for structured multi-step agent workflow.
 """
 
-from typing import TypedDict, Annotated, Sequence, Literal
+from typing import TypedDict, Annotated, Sequence, Literal, Union
 from langgraph.graph import StateGraph, END
-from anthropic import Anthropic
 from app.config.settings import settings
-from app.config.prompts import format_context_for_llm, format_messages_for_llm
+from app.demo import get_llm_client
+from app.config.prompts import format_context_for_llm, format_messages_for_llm, SESSION_END_DETECTION_PROMPT
 from app.agents.private_agent.agent import PrivateAgent
 from app.utils.logger import get_logger
 import time
@@ -54,7 +54,7 @@ class JointAgentState(TypedDict):
 
 
 def create_joint_agent_graph(
-    client: Anthropic,
+    client,  # Anthropic or MockAnthropicClient
     group_id: str,
     private_agent_a: PrivateAgent | None = None,
     private_agent_b: PrivateAgent | None = None,
@@ -263,36 +263,53 @@ Your response:"""
             state['response_text'] = "I apologize, I'm having trouble processing that. Could we try rephrasing?"
             return state
 
-    # Node 4: Check if session should end
+    # Node 4: Check if session should end (LLM-based detection)
     def check_end_session(state: JointAgentState) -> JointAgentState:
-        """Check if we should suggest ending the session."""
-        logger.info("[JointAgent] Checking if session should end...")
+        """
+        Use LLM to determine if session is naturally concluding.
+
+        Replaces heuristic keyword matching with intelligent analysis
+        of conversation flow, emotional state, and resolution indicators.
+        """
+        logger.info("[JointAgent] Checking if session should end (LLM-based)...")
 
         # Build recent conversation including current exchange
         recent_conv = format_messages_for_llm(state['messages_history'][-8:])
         recent_conv += f"\n{state['sender_name']}: {state['user_input']}"
         recent_conv += f"\nTherapist: {state['response_text']}"
 
-        # Heuristic check for end indicators
-        end_indicators = [
-            'nothing else',
-            'that\'s all',
-            'feel good about',
-            'thank you',
-            'appreciate it',
-            'helpful session',
-            'good stopping point',
-            'think we\'re done'
-        ]
+        # Build prompt for session end detection
+        prompt = SESSION_END_DETECTION_PROMPT.format(conversation=recent_conv)
 
-        conversation_lower = recent_conv.lower()
-        indicator_count = sum(1 for phrase in end_indicators if phrase in conversation_lower)
+        try:
+            start_time = time.time()
+            response = client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=100,
+                temperature=0.3,  # Lower temperature for consistent decisions
+                messages=[{"role": "user", "content": prompt}]
+            )
+            latency = int((time.time() - start_time) * 1000)
 
-        # Suggest ending if we see multiple indicators
-        state['should_end_session'] = indicator_count >= 2
+            decision_text = response.content[0].text.strip()
+            logger.info(f"[JointAgent] Session end detection: {decision_text} ({latency}ms)")
 
-        if state['should_end_session']:
-            logger.info(f"[JointAgent] Session end suggested (found {indicator_count} indicators)")
+            # Parse decision
+            should_end = decision_text.upper().startswith("YES")
+            state['should_end_session'] = should_end
+
+            # Track token usage
+            state['input_tokens'] = state.get('input_tokens', 0) + response.usage.input_tokens
+            state['output_tokens'] = state.get('output_tokens', 0) + response.usage.output_tokens
+            state['latency_ms'] = state.get('latency_ms', 0) + latency
+
+            if should_end:
+                logger.info("[JointAgent] LLM suggests session should end")
+
+        except Exception as e:
+            logger.error(f"[JointAgent] Error in session end detection: {e}")
+            # Fall back to not suggesting end on error
+            state['should_end_session'] = False
 
         return state
 

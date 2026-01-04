@@ -11,7 +11,7 @@ from app.agents.private_agent.agent import PrivateAgent
 from app.agents.private_agent.repo import PrivateAgentRepository
 from app.agents.joint_agent.agent import JointAgent
 from app.agents.joint_agent.repo import JointAgentRepository
-from typing import Dict, Optional, AsyncIterator
+from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable
 import uuid
 from datetime import datetime
 
@@ -119,6 +119,104 @@ class ChatService:
             'sender_id': 'therapist',
             'sender_name': 'AI Therapist',
             'content': response_text,
+            'timestamp': therapist_message.timestamp.isoformat(),
+            'suggest_end_session': False
+        }
+
+    async def process_private_message_stream(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        on_token: Callable[[str], Awaitable[None]]
+    ) -> Dict:
+        """
+        Process a private message with streaming response.
+
+        Args:
+            session_id: UUID of the session
+            user_id: UUID of the user
+            content: Message content
+            on_token: Async callback for each token
+
+        Returns:
+            Dictionary with final message metadata
+        """
+        # Get session
+        session = self.db.query(SessionModel).filter(
+            SessionModel.id == uuid.UUID(session_id)
+        ).first()
+
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        # Get user
+        user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+
+        # Save user message
+        user_message = Message(
+            id=uuid.uuid4(),
+            session_id=uuid.UUID(session_id),
+            sender_id=user_id,
+            sender_name=user.name,
+            content=content,
+            sequence_number=self._get_next_sequence_number(session_id),
+            timestamp=datetime.utcnow()
+        )
+        self.db.add(user_message)
+        self.db.commit()
+
+        # Get message history
+        messages = self.db.query(Message).filter(
+            Message.session_id == uuid.UUID(session_id)
+        ).order_by(Message.sequence_number).all()
+
+        messages_history = [
+            {
+                'sender_id': str(m.sender_id),
+                'sender_name': m.sender_name,
+                'content': m.content,
+                'timestamp': m.timestamp.isoformat()
+            }
+            for m in messages
+        ]
+
+        # Create Private Agent
+        repo = PrivateAgentRepository(self.db)
+        agent = PrivateAgent(user_id, str(session.group_id), repo)
+
+        # Stream response and collect full text
+        full_response = ""
+        async for token in agent.get_private_message_stream(content, messages_history):
+            full_response += token
+            await on_token(token)
+
+        # Save therapist message
+        therapist_message = Message(
+            id=uuid.uuid4(),
+            session_id=uuid.UUID(session_id),
+            sender_id='therapist',
+            sender_name='AI Therapist',
+            content=full_response,
+            sequence_number=self._get_next_sequence_number(session_id),
+            timestamp=datetime.utcnow()
+        )
+        self.db.add(therapist_message)
+
+        # Log LLM call
+        metrics = agent.get_last_metrics()
+        if metrics:
+            self._log_llm_call(session_id, metrics)
+
+        self.db.commit()
+
+        return {
+            'message_id': str(therapist_message.id),
+            'sender_id': 'therapist',
+            'sender_name': 'AI Therapist',
+            'content': full_response,
             'timestamp': therapist_message.timestamp.isoformat(),
             'suggest_end_session': False
         }

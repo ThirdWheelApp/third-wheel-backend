@@ -5,10 +5,14 @@ Manages accountability check-ins and their approval workflow.
 """
 
 from sqlalchemy.orm import Session
-from app.db.models import CheckIn
+from app.db.models import CheckIn, User
+from app.services.notification_service import NotificationService, NotificationType
+from app.utils.logger import get_logger
 import uuid
 from datetime import datetime, timedelta, date
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+logger = get_logger(__name__)
 
 
 class CheckInService:
@@ -25,6 +29,7 @@ class CheckInService:
 
     def __init__(self, db: Session):
         self.db = db
+        self.notification_service = NotificationService(db)
 
     async def create_checkins_from_extraction(
         self,
@@ -70,9 +75,10 @@ class CheckInService:
         self.db.commit()
         return created_checkins
 
-    def approve_checkin(
+    async def approve_checkin(
         self,
         checkin_id: str,
+        user_id: str,
         role: str  # 'assigned' or 'verifier'
     ) -> Dict:
         """
@@ -80,6 +86,7 @@ class CheckInService:
 
         Args:
             checkin_id: UUID of the check-in
+            user_id: UUID of the user approving
             role: Who is approving ('assigned' or 'verifier')
 
         Returns:
@@ -98,8 +105,19 @@ class CheckInService:
             checkin.verifier_approved = True
 
         # Activate if both approved
+        was_proposed = checkin.status == 'proposed'
         if self._is_fully_approved(checkin):
             checkin.status = 'active'
+
+            # Notify assigned user that check-in is now active
+            if was_proposed:
+                approver = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+                await self.notification_service.notify_check_in_assigned(
+                    user_id=str(checkin.assigned_to),
+                    check_in_id=str(checkin.id),
+                    title=checkin.title,
+                    assigned_by_name=approver.name if approver else "Partner"
+                )
 
         checkin.updated_at = datetime.utcnow()
         self.db.commit()
@@ -111,12 +129,13 @@ class CheckInService:
             'verifier_approved': checkin.verifier_approved
         }
 
-    def mark_checkin_done(self, checkin_id: str) -> Dict:
+    async def mark_checkin_done(self, checkin_id: str, user_id: str) -> Dict:
         """
         User marks check-in as done for the day/period.
 
         Args:
             checkin_id: UUID of the check-in
+            user_id: UUID of the user marking done
 
         Returns:
             Dictionary with updated progress
@@ -136,6 +155,16 @@ class CheckInService:
         # Update status based on verification requirement
         if checkin.requires_verification:
             checkin.status = 'awaiting_verification'
+
+            # Notify verifier that check-in needs verification
+            if checkin.verifier_id:
+                user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+                await self.notification_service.notify_check_in_verification_needed(
+                    verifier_id=str(checkin.verifier_id),
+                    check_in_id=str(checkin.id),
+                    title=checkin.title,
+                    completed_by_name=user.name if user else "Partner"
+                )
         elif progress['completed'] >= progress['total']:
             checkin.status = 'completed'
 
@@ -154,7 +183,7 @@ class CheckInService:
             'progress': checkin.progress
         }
 
-    def verify_checkin(
+    async def verify_checkin(
         self,
         checkin_id: str,
         verified_by: str,
@@ -180,10 +209,24 @@ class CheckInService:
         if not checkin:
             raise ValueError(f"Check-in {checkin_id} not found")
 
+        verifier = self.db.query(User).filter(User.id == uuid.UUID(verified_by)).first()
+
         if status == 'verified':
             # Reset to active for ongoing tracking
             checkin.status = 'active'
             checkin.verification_feedback = None
+
+            # Notify assigned user of approval
+            await self.notification_service.create_notification(
+                user_id=str(checkin.assigned_to),
+                notification_type=NotificationType.CHECK_IN_VERIFIED,
+                data={
+                    'checkInId': str(checkin.id),
+                    'title': checkin.title,
+                    'verifiedByName': verifier.name if verifier else "Partner",
+                    'message': f"Your check-in '{checkin.title}' was verified!"
+                }
+            )
         else:  # needs_work
             checkin.status = 'needs_work'
             checkin.verification_feedback = feedback or "Please try again"
@@ -192,6 +235,19 @@ class CheckInService:
             if progress and progress.get('completed', 0) > 0:
                 progress['completed'] -= 1
                 checkin.progress = progress
+
+            # Notify assigned user that check-in needs work
+            await self.notification_service.create_notification(
+                user_id=str(checkin.assigned_to),
+                notification_type=NotificationType.CHECK_IN_NEEDS_WORK,
+                data={
+                    'checkInId': str(checkin.id),
+                    'title': checkin.title,
+                    'verifiedByName': verifier.name if verifier else "Partner",
+                    'feedback': checkin.verification_feedback,
+                    'message': f"Your check-in '{checkin.title}' needs more work"
+                }
+            )
 
         checkin.updated_at = datetime.utcnow()
         self.db.commit()
@@ -211,6 +267,31 @@ class CheckInService:
             CheckIn.created_from_session == uuid.UUID(session_id),
             CheckIn.status == 'proposed'
         ).all()
+
+    def get_active_checkins_for_user(
+        self,
+        group_id: str,
+        user_id: str
+    ) -> List[CheckIn]:
+        """
+        Get active check-ins for a user in a group.
+
+        Returns check-ins where user is assigned_to OR verifier_id.
+        """
+        user_uuid = uuid.UUID(user_id)
+        group_uuid = uuid.UUID(group_id)
+
+        return self.db.query(CheckIn).filter(
+            CheckIn.group_id == group_uuid,
+            CheckIn.status.in_(['active', 'awaiting_verification', 'needs_work']),
+            (CheckIn.assigned_to == user_uuid) | (CheckIn.verifier_id == user_uuid)
+        ).order_by(CheckIn.next_check_date).all()
+
+    def get_checkin(self, checkin_id: str) -> Optional[CheckIn]:
+        """Get check-in by ID."""
+        return self.db.query(CheckIn).filter(
+            CheckIn.id == uuid.UUID(checkin_id)
+        ).first()
 
     def _is_fully_approved(self, checkin: CheckIn) -> bool:
         """Check if check-in is fully approved."""

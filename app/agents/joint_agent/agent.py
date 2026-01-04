@@ -5,8 +5,8 @@ AI therapist for couples therapy sessions.
 Orchestrates conversation using LangGraph state machine.
 """
 
-from anthropic import Anthropic
 from app.config.settings import settings
+from app.demo import get_llm_client
 from app.agents.joint_agent.repo import JointAgentRepository
 from app.agents.joint_agent.graph import create_joint_agent_graph
 from app.agents.private_agent.agent import PrivateAgent
@@ -50,7 +50,7 @@ class JointAgent:
         self.repo = repo
         self.private_agent_a = private_agent_a
         self.private_agent_b = private_agent_b
-        self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = get_llm_client()
 
         # Load group context once
         group_contexts = self.repo.get_group_context(group_id)

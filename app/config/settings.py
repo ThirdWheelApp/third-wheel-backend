@@ -38,9 +38,16 @@ class Settings(BaseSettings):
     SUPABASE_JWT_SECRET: str
 
     # ==========================================
+    # DEMO MODE CONFIGURATION
+    # ==========================================
+    # Enable demo mode with mock LLM responses (no API calls)
+    DEMO_MODE: bool = False
+
+    # ==========================================
     # ANTHROPIC API CONFIGURATION
     # ==========================================
-    ANTHROPIC_API_KEY: str
+    # Optional in demo mode, required otherwise
+    ANTHROPIC_API_KEY: Optional[str] = None
 
     # ==========================================
     # LLM CONFIGURATION

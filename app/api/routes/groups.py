@@ -96,6 +96,92 @@ async def create_group(
     return group
 
 
+@router.get("/my-groups", response_model=List[GroupResponse])
+async def get_my_groups(
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all groups that the current authenticated user is a member of.
+
+    Requires authentication.
+
+    Args:
+        current_user_id: Authenticated user ID from JWT
+        db: Database session
+
+    Returns:
+        List of groups the user belongs to
+    """
+    try:
+        user_uuid = uuid.UUID(current_user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID format"
+        )
+
+    # Find all groups where user is partner1 or partner2
+    groups = db.query(Group).filter(
+        (Group.partner1_id == user_uuid) |
+        (Group.partner2_id == user_uuid)
+    ).all()
+
+    logger.info(f"Found {len(groups)} groups for user {current_user_id}")
+    return groups
+
+
+@router.get("/user/{user_id}", response_model=List[GroupResponse])
+async def get_groups_for_user(
+    user_id: str,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all groups for a specific user.
+
+    This is an alias for /my-groups that accepts user_id in path.
+    Frontend uses this URL format for compatibility.
+
+    Note: For security, you can only query your own groups.
+    The user_id in path must match the authenticated user.
+
+    Args:
+        user_id: UUID of the user (must match authenticated user)
+        current_user_id: Authenticated user ID from JWT
+        db: Database session
+
+    Returns:
+        List of groups the user belongs to
+
+    Raises:
+        HTTPException: If user_id doesn't match authenticated user
+    """
+    # Security: Can only query your own groups
+    if user_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Can only query your own groups"
+        )
+
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID format"
+        )
+
+    # Find all groups where user is partner1 or partner2
+    groups = db.query(Group).filter(
+        (Group.partner1_id == user_uuid) |
+        (Group.partner2_id == user_uuid)
+    ).all()
+
+    logger.info(f"Found {len(groups)} groups for user {user_id}")
+    return groups
+
+
 @router.get("/{group_id}", response_model=GroupResponse)
 async def get_group(
     group_id: str,
@@ -145,41 +231,6 @@ async def get_group(
         )
 
     return group
-
-
-@router.get("/my-groups", response_model=List[GroupResponse])
-async def get_my_groups(
-    current_user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Get all groups that the current authenticated user is a member of.
-
-    Requires authentication.
-
-    Args:
-        current_user_id: Authenticated user ID from JWT
-        db: Database session
-
-    Returns:
-        List of groups the user belongs to
-    """
-    try:
-        user_uuid = uuid.UUID(current_user_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user ID format"
-        )
-
-    # Find all groups where user is partner1 or partner2
-    groups = db.query(Group).filter(
-        (Group.partner1_id == user_uuid) |
-        (Group.partner2_id == user_uuid)
-    ).all()
-
-    logger.info(f"Found {len(groups)} groups for user {current_user_id}")
-    return groups
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)

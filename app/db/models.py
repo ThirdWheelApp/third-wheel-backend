@@ -114,6 +114,9 @@ class Session(Base):
     # Session end tracking
     end_requested_by = Column(UUID(as_uuid=True), nullable=True)  # First user to click "End Session"
 
+    # Invite message for scheduled sessions (frontend compatibility)
+    invite_message = Column(Text, nullable=True)
+
     # Timestamps
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
@@ -156,6 +159,10 @@ class Message(Base):
 
     message_type = Column(String(50), default="message", nullable=False)  # 'message' or 'system'
 
+    # Privacy level for private session messages (1-5)
+    # 1 = can be referenced more freely, 5 = highly sensitive
+    privacy_level = Column(Integer, nullable=True)
+
     # Metadata for special flags (e.g., suggest_end_session)
     metadata = Column(JSONB, nullable=True)
 
@@ -176,12 +183,15 @@ class PrivateUserContext(Base):
 
     Stores insights learned about a user within a specific relationship.
     Context is relationship-scoped (same user can have different context in different relationships).
+
+    Composite Primary Key: (user_id, group_id, context_id)
     """
     __tablename__ = "private_user_context"
 
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
-    context_id = Column(UUID(as_uuid=True), default=uuid.uuid4, nullable=False)
+    # Composite primary key columns
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
+    context_id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True)
 
     # Context data stored as JSONB
     # Structure: {text, secret_level, tags, category, created_at, source_session_id, ...}
@@ -193,16 +203,10 @@ class PrivateUserContext(Base):
 
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
-    # Composite primary key
+    # Indexes
     __table_args__ = (
-        {'schema': None},
         Index('idx_private_context_user_group', 'user_id', 'group_id'),
     )
-
-    # Define primary key
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
-    context_id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True)
 
 
 class GroupContext(Base):
@@ -273,6 +277,10 @@ class CheckIn(Base):
     progress = Column(JSONB, nullable=True)  # {completed: 0, total: 7}
     next_check_date = Column(Date, nullable=True)
 
+    # Completion history for frontend display
+    # Array of {date: "YYYY-MM-DD", completed: true/false}
+    completion_history = Column(JSONB, nullable=True, default=[])
+
     # Verification feedback
     verification_feedback = Column(Text, nullable=True)
 
@@ -322,4 +330,41 @@ class LLMCall(Base):
     # Index for querying logs
     __table_args__ = (
         Index('idx_llm_calls_session', 'session_id', 'created_at'),
+    )
+
+
+class Notification(Base):
+    """
+    User notification model.
+
+    Stores notifications for users about check-ins, session events, etc.
+    Supports real-time delivery via WebSocket when user is connected.
+
+    Notification Types:
+    - check_in_assigned: New check-in needs your approval
+    - check_in_verification_needed: Partner marked check-in done
+    - session_end_requested: Partner wants to end session
+    - post_session_actions: Pending actions after session
+    """
+    __tablename__ = "notifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    type = Column(String(100), nullable=False)  # notification type identifier
+
+    # Data payload for the notification (varies by type)
+    # Examples:
+    # - check_in_assigned: {checkInId, title, assignedBy}
+    # - session_end_requested: {sessionId, requestedBy, requestedByName}
+    data = Column(JSONB, nullable=False, default={})
+
+    read = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_notifications_user', 'user_id', 'read'),
+        Index('idx_notifications_created', 'user_id', 'created_at'),
     )
