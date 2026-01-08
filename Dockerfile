@@ -16,8 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Make startup script executable
-RUN chmod +x start.sh
-
-# Run via startup script (bash will expand $PORT)
-CMD ["./start.sh"]
+# Use shell form CMD to allow $PORT expansion at runtime
+# Railway injects PORT=8080 at runtime, not build time
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
