@@ -164,7 +164,7 @@ class Message(Base):
     privacy_level = Column(Integer, nullable=True)
 
     # Metadata for special flags (e.g., suggest_end_session)
-    metadata = Column(JSONB, nullable=True)
+    message_metadata = Column("metadata", JSONB, nullable=True)
 
     timestamp = Column(DateTime, default=func.now(), nullable=False)
 

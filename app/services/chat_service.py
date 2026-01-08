@@ -330,7 +330,7 @@ class ChatService:
             sender_name='AI Therapist',
             content=response_text,
             sequence_number=self._get_next_sequence_number(session_id),
-            metadata={'suggest_end_session': suggest_end} if suggest_end else None,
+            message_metadata={'suggest_end_session': suggest_end} if suggest_end else None,
             timestamp=datetime.utcnow()
         )
         self.db.add(therapist_message)
