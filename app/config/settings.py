@@ -7,6 +7,7 @@ Settings are loaded from environment variables (defined in .env file).
 All configurable parameters are defined here with sensible defaults.
 """
 
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -94,7 +95,8 @@ class Settings(BaseSettings):
     # SERVER CONFIGURATION
     # ==========================================
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    # Railway provides PORT env var dynamically
+    PORT: int = int(os.getenv("PORT", 8000))
     ENVIRONMENT: str = "development"
 
     # Comma-separated list of allowed CORS origins for production

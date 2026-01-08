@@ -23,9 +23,37 @@ AI couples therapy platform with FastAPI, multi-agent LLM system, WebSocket chat
 
 ---
 
-## Deployment Modes
+## Quick Start
 
-### 1. Demo Mode (No API Costs)
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL (local) or Railway account
+- Supabase account (for auth)
+- Anthropic API key (optional for demo mode)
+
+### Local Development
+
+```bash
+# 1. Clone and configure
+git clone <repo-url>
+cd third-wheel-backend
+cp .env.example .env
+# Edit .env with your credentials
+
+# 2. Install dependencies and start
+./start.sh
+
+# 3. Optionally seed demo data
+python scripts/seed_demo_data.py
+```
+
+**URLs:**
+- API docs: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
+- WebSocket: `ws://localhost:8000/ws/chat/{sessionId}/{userId}?token=JWT`
+
+### Demo Mode (No API Costs)
 
 Perfect for testing and demos without incurring Anthropic API costs.
 
@@ -43,66 +71,72 @@ python scripts/seed_demo_data.py
 
 Demo mode uses mock LLM responses that simulate realistic therapy conversations.
 
-### 2. Local Development
+---
 
-For developing with real LLM responses.
+## Production Deployment (Railway)
+
+Railway provides managed PostgreSQL and easy deployment from GitHub.
+
+### Step 1: Create Railway Project
 
 ```bash
-# 1. Configure environment
-cp .env.example .env
-# Edit .env with your real credentials
+# Install Railway CLI
+npm install -g @railway/cli
 
-# 2. Install and start
-./start.sh
+# Login to Railway
+railway login
 
-# 3. Optionally seed demo data
-python scripts/seed_demo_data.py
+# Initialize project
+railway init
 ```
 
-**Prerequisites:**
-- Python 3.11+
-- PostgreSQL running locally
-- Supabase account (for auth)
-- Anthropic API key
+### Step 2: Add PostgreSQL Database
 
-**URLs:**
-- API docs: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
-- WebSocket: `ws://localhost:8000/ws/chat/{sessionId}/{userId}?token=JWT`
+1. In Railway dashboard, click **"New"** → **"Database"** → **"PostgreSQL"**
+2. Railway automatically provisions the database and sets `DATABASE_URL`
 
-### 3. Production (Replit)
+### Step 3: Deploy Backend
 
-Full production deployment on Replit.
+**Option A: GitHub Integration (Recommended)**
+1. In Railway dashboard, click **"New"** → **"GitHub Repo"**
+2. Select your repository
+3. Railway auto-deploys on every push
 
-**Prerequisites:**
-- Replit account with subscription (10GB PostgreSQL included)
-- Supabase account (free tier - auth only)
-- Anthropic API key
+**Option B: CLI Deployment**
+```bash
+railway link  # Link to existing project
+railway up    # Deploy current code
+```
 
-**Steps:**
+### Step 4: Configure Environment Variables
 
-1. **Enable PostgreSQL in Replit**
-   - Go to Replit → Tools → PostgreSQL
-   - Enable 10GB database (included with subscription)
+In Railway Dashboard → Your Service → **Variables**, add:
 
-2. **Add Secrets in Replit**
-   ```
-   DATABASE_URL=<auto-added by PostgreSQL tool>
-   SUPABASE_URL=https://xxx.supabase.co
-   SUPABASE_ANON_KEY=eyJhbGc...
-   SUPABASE_JWT_SECRET=your-jwt-secret
-   ANTHROPIC_API_KEY=sk-ant-api03-...
-   ENVIRONMENT=production
-   ALLOWED_ORIGINS=https://your-frontend.app
-   ```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Auto | Railway provides this automatically |
+| `SUPABASE_URL` | Yes | Your Supabase project URL (e.g., `https://abc.supabase.co`) |
+| `SUPABASE_ANON_KEY` | Yes | Supabase public/anon key |
+| `SUPABASE_JWT_SECRET` | Yes | From Supabase → Settings → API → JWT Settings |
+| `ANTHROPIC_API_KEY` | If !demo | Your Anthropic API key |
+| `DEMO_MODE` | No | Set `true` for mock LLM responses |
+| `LLM_MODEL` | No | Default: `claude-3-haiku-20240307` |
+| `ENVIRONMENT` | No | Set to `production` |
+| `ALLOWED_ORIGINS` | Yes | Frontend URLs, comma-separated |
+| `LOG_LEVEL` | No | Default: `INFO` |
 
-3. **Deploy**
-   - Click "Run" button
-   - Database tables auto-create on startup
+### Step 5: Verify Deployment
 
-4. **Verify**
-   - Health: `https://your-repl-name.repl.co/health`
-   - Docs: `https://your-repl-name.repl.co/docs`
+```bash
+# Health check
+curl https://your-app.railway.app/health
+
+# Expected response:
+# {"status": "healthy", "database": "connected", "llm_service": "configured"}
+```
+
+- **API Docs:** `https://your-app.railway.app/docs`
+- **WebSocket:** `wss://your-app.railway.app/ws/chat/{sessionId}/{userId}?token=JWT`
 
 ---
 
@@ -148,17 +182,17 @@ Full API docs available at `/docs` (Swagger UI)
 
 ### Connection
 ```
-ws://host/ws/chat/{sessionId}/{userId}?token=JWT
+wss://your-app.railway.app/ws/chat/{sessionId}/{userId}?token=JWT
 ```
 
-### Incoming Messages
+### Client → Server Messages
 ```json
 {"type": "message", "content": "Hello", "stream": true}
 {"type": "typing_start"}
 {"type": "typing_stop"}
 ```
 
-### Outgoing Messages
+### Server → Client Messages
 ```json
 // Regular message
 {"type": "message", "messageId": "...", "senderId": "...", "content": "..."}
@@ -211,6 +245,7 @@ All configuration via environment variables:
 | `LLM_MODEL` | No | claude-3-haiku | Model to use |
 | `ENVIRONMENT` | No | development | development/production |
 | `SECRET_LEVEL_THRESHOLD` | No | 5 | Context sharing threshold |
+| `PORT` | No | 8000 | Server port (Railway sets automatically) |
 
 See `.env.example` for full list.
 
@@ -231,10 +266,40 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
+## Troubleshooting
+
+### Railway Deployment Issues
+
+**Database connection fails:**
+- Ensure `DATABASE_URL` is set (Railway auto-provides this for PostgreSQL services)
+- Check if PostgreSQL service is running in Railway dashboard
+
+**Health check fails:**
+- Check build logs in Railway dashboard
+- Ensure all required env vars are set
+- Verify `SUPABASE_JWT_SECRET` is correct
+
+**WebSocket not connecting:**
+- Use `wss://` (not `ws://`) for Railway production
+- Ensure JWT token is valid and passed as query param
+- Check CORS settings in `ALLOWED_ORIGINS`
+
+### Local Development Issues
+
+**Import errors:**
+- Ensure virtual environment is activated
+- Run `pip install -r requirements.txt`
+
+**Database errors:**
+- Ensure PostgreSQL is running
+- Check `DATABASE_URL` format: `postgresql://user:pass@localhost:5432/dbname`
+
+---
+
 ## Important Notes
 
 - **Field Names:** API responses use camelCase (frontend-compatible)
 - **User IDs:** Supabase UUID used as primary key
-- **WebSocket URL:** Includes both sessionId and userId in path
-- **Streaming:** Available for private sessions via `stream: true`
+- **WebSocket URL:** Includes both sessionId and userId in path, token in query
+- **Streaming:** Available for sessions via `stream: true`
 - **Privacy:** Contexts with secret_level > 5 never shared in joint sessions
