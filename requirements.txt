@@ -11,24 +11,24 @@ psycopg2-binary==2.9.9
 asyncpg==0.29.0
 
 # Supabase & Auth
-supabase==2.3.4
+supabase>=2.3.0,<3.0.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 
-# LLM & AI
-anthropic==0.39.0
-langgraph==0.2.45
-langchain-core==0.3.15
-langchain-anthropic==0.3.0
+# LLM & AI (use compatible ranges - these packages update frequently)
+anthropic>=0.39.0,<1.0.0
+langgraph>=0.2.0,<1.0.0
+langchain-core>=0.3.17,<0.4.0
+langchain-anthropic>=0.3.0,<0.4.0
 
 # Vector Search (for future)
 pgvector==0.2.4
 
 # Utilities
-pydantic==2.5.3
-pydantic-settings==2.1.0
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
 python-dotenv==1.0.0
-httpx==0.25.2
+httpx>=0.24.0,<0.26.0
 
 # Development
 pytest==7.4.4
