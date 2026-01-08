@@ -16,6 +16,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Run via Python - reads PORT from environment via os.getenv()
-# This bypasses shell variable expansion issues on Railway
-CMD ["python", "-m", "app.main"]
+# Run via a shell script to expand PORT reliably (e.g., Railway)
+CMD ["./scripts/start.sh"]
