@@ -38,6 +38,19 @@ async def initialize_user(
     if existing:
         return existing
 
+    # Also check by email (handles re-signup with new Supabase ID)
+    existing_by_email = db.query(User).filter(
+        User.email == user_data.email
+    ).first()
+
+    if existing_by_email:
+        # User re-signed up with new Supabase account - update their ID
+        existing_by_email.id = uuid.UUID(user_data.supabase_user_id)
+        existing_by_email.name = user_data.name  # Update name too in case it changed
+        db.commit()
+        db.refresh(existing_by_email)
+        return existing_by_email
+
     # Create new user with Supabase UUID as primary key
     user = User(
         id=uuid.UUID(user_data.supabase_user_id),  # Use Supabase ID as primary key
