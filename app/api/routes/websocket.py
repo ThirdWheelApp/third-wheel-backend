@@ -30,6 +30,34 @@ async def websocket_test():
     }
 
 
+@router.websocket("/ws/echo")
+async def websocket_echo(websocket: WebSocket):
+    """
+    No-auth WebSocket echo endpoint for debugging Railway connectivity.
+
+    If this works but /ws/chat doesn't, the issue is auth/path-related.
+    If this also fails with 403, it's a Railway edge configuration issue.
+
+    Remove this endpoint after debugging is complete.
+    """
+    logger.info("====== WEBSOCKET ECHO ENDPOINT HIT ======")
+    await websocket.accept()
+    logger.info("WebSocket echo: connection accepted")
+
+    try:
+        await websocket.send_json({
+            "type": "connected",
+            "message": "Echo endpoint connected successfully"
+        })
+
+        while True:
+            data = await websocket.receive_text()
+            logger.info(f"WebSocket echo received: {data}")
+            await websocket.send_text(f"Echo: {data}")
+    except Exception as e:
+        logger.info(f"WebSocket echo disconnected: {e}")
+
+
 @router.websocket("/ws/chat/{session_id}/{user_id}")
 async def websocket_chat(
     websocket: WebSocket,

@@ -17,6 +17,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 from contextlib import asynccontextmanager
 import json
 import time
@@ -28,6 +29,32 @@ from app.utils.logger import get_logger
 from app.utils.serializers import convert_keys_to_camel
 
 logger = get_logger(__name__)
+
+
+class WebSocketLoggingMiddleware:
+    """
+    Pure ASGI middleware to log WebSocket connection attempts.
+
+    BaseHTTPMiddleware only handles HTTP scopes, so WebSocket connections
+    are invisible to it. This middleware logs ALL scope types including websocket.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "websocket":
+            path = scope.get("path", "unknown")
+            query = scope.get("query_string", b"").decode("utf-8", errors="replace")
+            headers = dict(scope.get("headers", []))
+
+            # Log connection attempt (mask token in query string for security)
+            safe_query = query[:50] + "..." if len(query) > 50 else query
+            logger.info(f">>> WEBSOCKET CONNECT: {path}?{safe_query}")
+            logger.info(f"    Headers: upgrade={headers.get(b'upgrade', b'').decode()}, "
+                       f"connection={headers.get(b'connection', b'').decode()}")
+
+        await self.app(scope, receive, send)
 
 
 class CamelCaseMiddleware(BaseHTTPMiddleware):
@@ -205,6 +232,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 # Add request logging middleware (added last = runs first on request)
 app.add_middleware(RequestLoggingMiddleware)
+
+# Add WebSocket logging middleware (ASGI-level, catches websocket scopes that
+# BaseHTTPMiddleware misses). This runs outermost on the middleware stack.
+app.add_middleware(WebSocketLoggingMiddleware)
 
 
 # Add validation exception handler for debugging
