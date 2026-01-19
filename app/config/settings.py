@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_JWT_SECRET: str
+    # Service role key for admin operations (e.g., inviteUserByEmail)
+    # Optional - only needed for partner invitation feature
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
 
     # ==========================================
     # DEMO MODE CONFIGURATION

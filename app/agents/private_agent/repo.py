@@ -8,7 +8,7 @@ Loads context from database for a specific user within a relationship.
 from sqlalchemy.orm import Session
 from app.db.models import PrivateUserContext, GroupContext
 from app.config.settings import settings
-from typing import List, Dict
+from typing import List, Dict, Optional
 import uuid
 
 
@@ -26,7 +26,7 @@ class PrivateAgentRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all_context(self, user_id: str, group_id: str) -> List[Dict]:
+    def get_all_context(self, user_id: str, group_id: Optional[str]) -> List[Dict]:
         """
         Load all context for a user within a specific relationship.
 
@@ -38,7 +38,7 @@ class PrivateAgentRepository:
 
         Args:
             user_id: UUID of the user
-            group_id: UUID of the relationship/group
+            group_id: UUID of the relationship/group (None for solo private sessions)
 
         Returns:
             List of context dictionaries sorted by recency
@@ -50,6 +50,12 @@ class PrivateAgentRepository:
         # Convert string UUIDs to UUID objects if needed
         if isinstance(user_id, str):
             user_id = uuid.UUID(user_id)
+
+        # For solo private sessions without a relationship, return empty context
+        # The user hasn't connected with a partner yet
+        if group_id is None:
+            return []
+
         if isinstance(group_id, str):
             group_id = uuid.UUID(group_id)
 
@@ -125,7 +131,7 @@ class PrivateAgentRepository:
     def get_recent_context(
         self,
         user_id: str,
-        group_id: str,
+        group_id: Optional[str],
         limit: int = 20
     ) -> List[Dict]:
         """
@@ -135,7 +141,7 @@ class PrivateAgentRepository:
 
         Args:
             user_id: UUID of the user
-            group_id: UUID of the relationship
+            group_id: UUID of the relationship (None for solo sessions)
             limit: Number of contexts to retrieve
 
         Returns:

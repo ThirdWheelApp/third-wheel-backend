@@ -52,6 +52,20 @@ class UserResponse(CamelCaseModel):
     created_at: datetime
 
 
+class InvitePartnerRequest(BaseModel):
+    """Schema for inviting a partner via email."""
+    partner_email: EmailStr = Field(..., alias="partnerEmail")
+    inviter_name: str = Field(..., alias="inviterName")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class InvitePartnerResponse(CamelCaseModel):
+    """Schema for partner invitation response."""
+    success: bool
+    message: str
+
+
 # ============================================================================
 # Group Schemas
 # ============================================================================

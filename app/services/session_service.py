@@ -140,6 +140,18 @@ class SessionService:
         self.db.commit()
 
         try:
+            # Skip context extraction and check-ins for solo private sessions
+            # (no relationship/partner yet)
+            if session.group_id is None:
+                session.status = 'concluded'
+                self.db.commit()
+                return {
+                    'session_id': str(session.id),
+                    'status': session.status,
+                    'contexts_extracted': 0,
+                    'check_ins_proposed': 0
+                }
+
             # Extract context from session
             extracted_data = await self.context_service.extract_context_from_session(
                 session_id

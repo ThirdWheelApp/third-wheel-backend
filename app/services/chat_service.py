@@ -89,8 +89,10 @@ class ChatService:
         ]
 
         # Create Private Agent
+        # Handle None group_id for solo private sessions (no partner yet)
         repo = PrivateAgentRepository(self.db)
-        agent = PrivateAgent(user_id, str(session.group_id), repo)
+        group_id = str(session.group_id) if session.group_id else None
+        agent = PrivateAgent(user_id, group_id, repo)
 
         # Generate response
         response_text = await agent.get_private_message(content, messages_history)
@@ -184,8 +186,10 @@ class ChatService:
         ]
 
         # Create Private Agent
+        # Handle None group_id for solo private sessions (no partner yet)
         repo = PrivateAgentRepository(self.db)
-        agent = PrivateAgent(user_id, str(session.group_id), repo)
+        group_id = str(session.group_id) if session.group_id else None
+        agent = PrivateAgent(user_id, group_id, repo)
 
         # Stream response and collect full text
         full_response = ""

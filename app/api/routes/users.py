@@ -6,9 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.schemas import UserCreate, UserResponse
+from app.schemas.schemas import UserCreate, UserResponse, InvitePartnerRequest, InvitePartnerResponse
 from app.utils.auth import get_current_user
+from app.utils.supabase_admin import get_supabase_admin, is_admin_configured
+from app.utils.logger import get_logger
 import uuid
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -110,3 +114,59 @@ async def get_user(
     # For now, allow any authenticated user to view profiles
 
     return user
+
+
+@router.post("/invite-partner", response_model=InvitePartnerResponse)
+async def invite_partner(
+    invite_data: InvitePartnerRequest,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Send partner invitation email via Supabase.
+
+    Uses Supabase's inviteUserByEmail API to send an invitation email
+    to the partner. The partner will receive an email with a link to
+    sign up for the app.
+
+    Requires authentication and SUPABASE_SERVICE_ROLE_KEY to be configured.
+    """
+    # Check if admin client is configured
+    if not is_admin_configured():
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Partner invitation feature is not configured. Please set SUPABASE_SERVICE_ROLE_KEY."
+        )
+
+    # Get inviter user for name
+    inviter = db.query(User).filter(User.id == uuid.UUID(current_user_id)).first()
+    inviter_name = inviter.name if inviter else invite_data.inviter_name
+
+    try:
+        supabase = get_supabase_admin()
+
+        # Invite the partner using Supabase admin API
+        response = supabase.auth.admin.invite_user_by_email(
+            invite_data.partner_email,
+            options={
+                "redirect_to": "thirdwheel://signup",  # Deep link to app
+                "data": {
+                    "invited_by": current_user_id,
+                    "inviter_name": inviter_name
+                }
+            }
+        )
+
+        logger.info(f"Partner invitation sent to {invite_data.partner_email} by user {current_user_id}")
+
+        return InvitePartnerResponse(
+            success=True,
+            message=f"Invitation sent to {invite_data.partner_email}"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to send partner invitation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to send invitation: {str(e)}"
+        )

@@ -16,7 +16,7 @@ from app.config.prompts import (
 )
 from app.agents.private_agent.repo import PrivateAgentRepository
 from app.utils.logger import get_logger
-from typing import List, Dict, AsyncIterator, AsyncGenerator
+from typing import List, Dict, AsyncIterator, AsyncGenerator, Optional
 import time
 
 logger = get_logger(__name__)
@@ -41,7 +41,7 @@ class PrivateAgent:
     def __init__(
         self,
         user_id: str,
-        group_id: str,
+        group_id: Optional[str],
         repo: PrivateAgentRepository
     ):
         """
@@ -49,7 +49,7 @@ class PrivateAgent:
 
         Args:
             user_id: UUID of the user this agent serves
-            group_id: UUID of the relationship/group
+            group_id: UUID of the relationship/group (None for solo private sessions)
             repo: Repository for data access
         """
         self.user_id = user_id
