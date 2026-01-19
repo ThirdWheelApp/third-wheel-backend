@@ -48,14 +48,20 @@ class ChatHandler:
             session_id: UUID of the session
             user_id: UUID of the user
         """
+        logger.info(f"handle_connection: Starting for session={session_id}, user={user_id}")
+
         # Connect
         await manager.connect(session_id, user_id, websocket)
+        logger.info(f"handle_connection: WebSocket accepted and registered")
 
         try:
             # Send sync message with current session state
+            logger.info(f"handle_connection: Sending sync message...")
             await self._send_sync_message(websocket, session_id)
+            logger.info(f"handle_connection: Sync message sent successfully")
 
             # Listen for messages
+            logger.info(f"handle_connection: Entering message loop...")
             while True:
                 data = await websocket.receive_json()
                 await self._handle_message(
@@ -66,9 +72,10 @@ class ChatHandler:
                 )
 
         except WebSocketDisconnect:
+            logger.info(f"handle_connection: WebSocketDisconnect received")
             manager.disconnect(session_id, websocket)
         except Exception as e:
-            logger.error(f"Error in WebSocket handler: {e}", exc_info=True)
+            logger.error(f"handle_connection: Exception - {e}", exc_info=True)
             manager.disconnect(session_id, websocket)
 
     async def _handle_message(
@@ -306,23 +313,30 @@ class ChatHandler:
         from app.db.models import Session as SessionModel, Message
         import uuid
 
-        session = self.db.query(SessionModel).filter(
-            SessionModel.id == uuid.UUID(session_id)
-        ).first()
+        logger.info(f"_send_sync_message: Querying session {session_id}")
 
-        if not session:
-            return
+        try:
+            session = self.db.query(SessionModel).filter(
+                SessionModel.id == uuid.UUID(session_id)
+            ).first()
 
-        # Get recent messages
-        messages = self.db.query(Message).filter(
-            Message.session_id == uuid.UUID(session_id)
-        ).order_by(Message.sequence_number.desc()).limit(50).all()
+            if not session:
+                logger.warning(f"_send_sync_message: Session {session_id} not found!")
+                return
 
-        messages.reverse()  # Chronological order
+            logger.info(f"_send_sync_message: Found session, status={session.status}")
 
-        # Send sync message with camelCase keys for frontend
-        await manager.send_personal_message(
-            {
+            # Get recent messages
+            messages = self.db.query(Message).filter(
+                Message.session_id == uuid.UUID(session_id)
+            ).order_by(Message.sequence_number.desc()).limit(50).all()
+
+            logger.info(f"_send_sync_message: Found {len(messages)} messages")
+
+            messages.reverse()  # Chronological order
+
+            # Send sync message with camelCase keys for frontend
+            sync_message = {
                 'type': 'sync',
                 'sessionStatus': session.status,
                 'messages': [
@@ -336,6 +350,10 @@ class ChatHandler:
                     }
                     for m in messages
                 ]
-            },
-            websocket
-        )
+            }
+            logger.info(f"_send_sync_message: Sending sync message...")
+            await manager.send_personal_message(sync_message, websocket)
+            logger.info(f"_send_sync_message: Sync message sent!")
+        except Exception as e:
+            logger.error(f"_send_sync_message: Error - {e}", exc_info=True)
+            raise

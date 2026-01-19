@@ -119,9 +119,11 @@ class ConnectionManager:
             websocket: Target WebSocket connection
         """
         try:
+            logger.info(f"send_personal_message: Sending message type={message.get('type')}")
             await websocket.send_json(message)
+            logger.info(f"send_personal_message: Message sent successfully")
         except Exception as e:
-            logger.error(f"Error sending personal message: {e}")
+            logger.error(f"send_personal_message: Error - {e}", exc_info=True)
 
     async def broadcast(
         self,
