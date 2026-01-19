@@ -11,9 +11,65 @@ from app.db.database import get_db
 from app.websocket.chat_handler import ChatHandler
 from app.utils.auth import get_user_from_token
 from app.utils.logger import get_logger
+from typing import Optional
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _get_token_from_headers(websocket: WebSocket) -> Optional[str]:
+    auth_header = websocket.headers.get("authorization")
+    if not auth_header:
+        return None
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1].strip()
+
+
+def _resolve_token(websocket: WebSocket, token: Optional[str]) -> Optional[str]:
+    header_token = _get_token_from_headers(websocket)
+    return header_token or token
+
+
+async def _handle_websocket_chat(
+    websocket: WebSocket,
+    session_id: str,
+    user_id: Optional[str],
+    token: Optional[str],
+    db: Session,
+):
+    token_value = _resolve_token(websocket, token)
+    token_source = "header" if token_value and token_value == _get_token_from_headers(websocket) else "query"
+    logger.info(f">>> WebSocket token source: {token_source}, length: {len(token_value) if token_value else 0}")
+
+    if not token_value:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Missing authentication token"
+        )
+
+    # Validate JWT token and verify user_id matches (if provided)
+    try:
+        token_user_id = get_user_from_token(token_value)
+        if user_id and token_user_id != user_id:
+            logger.warning(f"User ID mismatch: path={user_id}, token={token_user_id}")
+            raise WebSocketException(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="User ID does not match token"
+            )
+        logger.info(f"WebSocket authentication successful for user {token_user_id}")
+    except WebSocketException:
+        raise
+    except Exception as e:
+        logger.warning(f"WebSocket authentication failed: {str(e)}")
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Invalid or expired authentication token"
+        )
+
+    handler = ChatHandler(db)
+    await handler.handle_connection(websocket, session_id, token_user_id)
 
 
 @router.get("/ws/test")
@@ -58,18 +114,40 @@ async def websocket_echo(websocket: WebSocket):
         logger.info(f"WebSocket echo disconnected: {e}")
 
 
+@router.websocket("/ws/chat/{session_id}")
+async def websocket_chat_session(
+    websocket: WebSocket,
+    session_id: str,
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    WebSocket endpoint for chat sessions (token-only path).
+
+    Connection URL:
+    ws://localhost:8000/ws/chat/{sessionId}?token=JWT_TOKEN
+
+    Token can also be provided via Authorization header:
+    Authorization: Bearer <JWT>
+    """
+    logger.info("====== WEBSOCKET ENDPOINT HIT ======")
+    logger.info(f">>> WebSocket connection attempt: session={session_id}")
+
+    await _handle_websocket_chat(websocket, session_id, None, token, db)
+
+
 @router.websocket("/ws/chat/{session_id}/{user_id}")
 async def websocket_chat(
     websocket: WebSocket,
     session_id: str,
     user_id: str,
-    token: str = Query(...),
+    token: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
     WebSocket endpoint for chat sessions.
 
-    Requires JWT authentication via query parameter.
+    Requires JWT authentication via query parameter or Authorization header.
     Connection URL: ws://localhost:8000/ws/chat/{sessionId}/{userId}?token=JWT_TOKEN
 
     The user_id in the path must match the user_id from the JWT token.
@@ -119,29 +197,7 @@ async def websocket_chat(
         "message": "Error description"
     }
     """
-    logger.info(f"====== WEBSOCKET ENDPOINT HIT ======")
+    logger.info("====== WEBSOCKET ENDPOINT HIT ======")
     logger.info(f">>> WebSocket connection attempt: session={session_id}, user={user_id}")
-    logger.info(f">>> Token length: {len(token) if token else 0}")
 
-    # Validate JWT token and verify user_id matches
-    try:
-        token_user_id = get_user_from_token(token)
-        # Verify the user_id in path matches the one in token
-        if token_user_id != user_id:
-            logger.warning(f"User ID mismatch: path={user_id}, token={token_user_id}")
-            raise WebSocketException(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason="User ID does not match token"
-            )
-        logger.info(f"WebSocket authentication successful for user {user_id}")
-    except WebSocketException:
-        raise
-    except Exception as e:
-        logger.warning(f"WebSocket authentication failed: {str(e)}")
-        raise WebSocketException(
-            code=status.WS_1008_POLICY_VIOLATION,
-            reason="Invalid or expired authentication token"
-        )
-
-    handler = ChatHandler(db)
-    await handler.handle_connection(websocket, session_id, user_id)
+    await _handle_websocket_chat(websocket, session_id, user_id, token, db)
