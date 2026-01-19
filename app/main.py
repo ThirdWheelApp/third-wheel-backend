@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import json
+import time
 
 from app.config.settings import settings
 from app.db.database import engine, Base
@@ -137,6 +138,33 @@ app.add_middleware(
 # Add camelCase middleware for JSON responses
 # Note: Middleware order matters - CamelCase runs after CORS
 app.add_middleware(CamelCaseMiddleware)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """
+    Logs all incoming requests for debugging.
+
+    This middleware runs FIRST on requests (added last = runs first).
+    Helps identify if requests are reaching the server at all.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        logger.info(f">>> INCOMING: {request.method} {request.url.path}")
+
+        try:
+            response = await call_next(request)
+            elapsed = time.time() - start_time
+            logger.info(f"<<< RESPONSE: {request.method} {request.url.path} [{response.status_code}] ({elapsed:.3f}s)")
+            return response
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"!!! ERROR: {request.method} {request.url.path} - {e} ({elapsed:.3f}s)")
+            raise
+
+
+# Add request logging middleware (added last = runs first on request)
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # Add validation exception handler for debugging
