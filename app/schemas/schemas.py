@@ -5,9 +5,10 @@ Defines data structures for API endpoints.
 Uses camelCase aliases for frontend compatibility.
 """
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_serializer
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
+from uuid import UUID
 
 
 def to_camel(string: str) -> str:
@@ -27,6 +28,18 @@ class CamelCaseModel(BaseModel):
         populate_by_name=True,
         alias_generator=to_camel,
     )
+
+    @field_serializer(
+        'id', 'group_id', 'session_id', 'user_id', 'sender_id',
+        'partner1_id', 'partner2_id', 'assigned_to', 'verifier_id',
+        'created_by', 'created_from_session',
+        check_fields=False
+    )
+    def serialize_uuid(self, v):
+        """Convert UUID objects to strings for JSON serialization."""
+        if v is None:
+            return None
+        return str(v) if isinstance(v, UUID) else v
 
 
 # ============================================================================
