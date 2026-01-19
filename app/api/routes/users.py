@@ -4,10 +4,11 @@ User API Routes
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.db.database import get_db
 from app.db.models import User
 from app.schemas.schemas import UserCreate, UserResponse, InvitePartnerRequest, InvitePartnerResponse
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, get_current_user_optional
 from app.utils.supabase_admin import get_supabase_admin, is_admin_configured
 from app.utils.logger import get_logger
 import uuid
@@ -119,7 +120,7 @@ async def get_user(
 @router.post("/invite-partner", response_model=InvitePartnerResponse)
 async def invite_partner(
     invite_data: InvitePartnerRequest,
-    current_user_id: str = Depends(get_current_user),
+    current_user_id: Optional[str] = Depends(get_current_user_optional),
     db: Session = Depends(get_db)
 ):
     """
@@ -129,21 +130,47 @@ async def invite_partner(
     to the partner. The partner will receive an email with a link to
     sign up for the app.
 
-    Requires authentication and SUPABASE_SERVICE_ROLE_KEY to be configured.
+    Authentication is optional:
+    - If authenticated: Uses current_user_id from token
+    - If not authenticated: Uses inviter_user_id from request body (for onboarding flow)
+
+    Requires SUPABASE_SERVICE_ROLE_KEY to be configured.
     """
+    logger.info(f"Partner invitation request: partner_email={invite_data.partner_email}, "
+                f"authenticated_user={current_user_id}, "
+                f"inviter_user_id_from_body={invite_data.inviter_user_id}")
+
     # Check if admin client is configured
     if not is_admin_configured():
+        logger.error("Partner invitation failed: SUPABASE_SERVICE_ROLE_KEY not configured")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Partner invitation feature is not configured. Please set SUPABASE_SERVICE_ROLE_KEY."
         )
 
-    # Get inviter user for name
-    inviter = db.query(User).filter(User.id == uuid.UUID(current_user_id)).first()
-    inviter_name = inviter.name if inviter else invite_data.inviter_name
+    # Determine the inviter user ID
+    # Priority: authenticated user > body parameter
+    inviter_id = current_user_id or invite_data.inviter_user_id
+
+    if not inviter_id:
+        logger.warning("Partner invitation failed: No user ID provided (neither auth nor body)")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID is required. Provide authentication or inviterUserId in body."
+        )
+
+    # Get inviter user for name (if they exist in our DB)
+    try:
+        inviter = db.query(User).filter(User.id == uuid.UUID(inviter_id)).first()
+        inviter_name = inviter.name if inviter else invite_data.inviter_name
+    except Exception:
+        # If user not in our DB yet (during onboarding), use provided name
+        inviter_name = invite_data.inviter_name
 
     try:
         supabase = get_supabase_admin()
+
+        logger.info(f"Sending Supabase invitation to {invite_data.partner_email}")
 
         # Invite the partner using Supabase admin API
         response = supabase.auth.admin.invite_user_by_email(
@@ -151,13 +178,13 @@ async def invite_partner(
             options={
                 "redirect_to": "thirdwheel://signup",  # Deep link to app
                 "data": {
-                    "invited_by": current_user_id,
+                    "invited_by": inviter_id,
                     "inviter_name": inviter_name
                 }
             }
         )
 
-        logger.info(f"Partner invitation sent to {invite_data.partner_email} by user {current_user_id}")
+        logger.info(f"Partner invitation sent successfully to {invite_data.partner_email} by user {inviter_id}")
 
         return InvitePartnerResponse(
             success=True,

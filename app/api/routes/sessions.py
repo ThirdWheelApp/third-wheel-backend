@@ -8,6 +8,9 @@ from app.db.database import get_db
 from app.services.session_service import SessionService
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -27,24 +30,41 @@ async def create_session(
     Private sessions can be created without a group_id (solo sessions).
     Joint sessions require a group_id (partner relationship).
     """
+    logger.info(f"Session creation request: type={session_data.session_type}, "
+                f"group_id={session_data.group_id}, "
+                f"user={current_user_id}, "
+                f"participants={session_data.participants}")
+
     # Joint sessions require a group/relationship
     if session_data.session_type == "joint" and not session_data.group_id:
+        logger.warning(f"Session creation failed: Joint session without group_id")
         raise HTTPException(
             status_code=400,
             detail="Group ID is required for joint sessions"
         )
 
-    service = SessionService(db)
+    try:
+        service = SessionService(db)
 
-    session = service.create_session(
-        group_id=session_data.group_id,
-        session_type=session_data.session_type,
-        created_by=current_user_id,  # Authenticated user
-        participants=session_data.participants,
-        scheduled_for=session_data.scheduled_for
-    )
+        session = service.create_session(
+            group_id=session_data.group_id,
+            session_type=session_data.session_type,
+            created_by=current_user_id,  # Authenticated user
+            participants=session_data.participants,
+            scheduled_for=session_data.scheduled_for
+        )
 
-    return session
+        logger.info(f"Session created successfully: id={session.id}, type={session.type}, "
+                    f"group_id={session.group_id}, status={session.status}")
+
+        return session
+
+    except Exception as e:
+        logger.error(f"Session creation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create session: {str(e)}"
+        )
 
 
 @router.post("/{session_id}/request-end")
