@@ -56,7 +56,16 @@ class ConnectionManager:
             user_id: UUID of the user
             websocket: WebSocket connection object
         """
+        logger.info(f"manager.connect: Accepting WebSocket for user={user_id}")
         await websocket.accept()
+        logger.info(f"manager.connect: WebSocket accepted")
+
+        # Send immediate ping to verify connection
+        try:
+            await websocket.send_json({"type": "ping", "message": "connection_test"})
+            logger.info(f"manager.connect: Ping sent successfully")
+        except Exception as e:
+            logger.error(f"manager.connect: Failed to send ping - {e}")
 
         # Add to session's connections
         if session_id not in self.active_connections:
@@ -71,7 +80,7 @@ class ConnectionManager:
             self.user_connections[user_id] = set()
         self.user_connections[user_id].add(websocket)
 
-        logger.info(f"User {user_id} connected to session {session_id}")
+        logger.info(f"manager.connect: User {user_id} fully connected to session {session_id}")
 
     def disconnect(self, session_id: str, websocket: WebSocket):
         """
