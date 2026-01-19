@@ -23,7 +23,17 @@ async def create_session(
 
     Requires authentication. Current user will be set as the session creator
     and must be included in the participants list.
+
+    Private sessions can be created without a group_id (solo sessions).
+    Joint sessions require a group_id (partner relationship).
     """
+    # Joint sessions require a group/relationship
+    if session_data.session_type == "joint" and not session_data.group_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Group ID is required for joint sessions"
+        )
+
     service = SessionService(db)
 
     session = service.create_session(

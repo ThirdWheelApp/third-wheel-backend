@@ -43,7 +43,7 @@ class SessionService:
         Create a new therapy session.
 
         Args:
-            group_id: UUID of the relationship
+            group_id: UUID of the relationship (optional for private sessions)
             session_type: 'private' or 'joint'
             created_by: UUID of user creating the session
             participants: List of participant UUIDs
@@ -54,7 +54,7 @@ class SessionService:
         """
         session = SessionModel(
             id=uuid.uuid4(),
-            group_id=uuid.UUID(group_id),
+            group_id=uuid.UUID(group_id) if group_id else None,  # Optional for private sessions
             type=session_type,
             status='active' if not scheduled_for else 'scheduled',
             created_by=uuid.UUID(created_by),

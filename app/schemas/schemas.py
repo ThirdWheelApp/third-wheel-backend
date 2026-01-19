@@ -83,7 +83,7 @@ class GroupResponse(CamelCaseModel):
 
 class SessionCreate(BaseModel):
     """Schema for creating a therapy session."""
-    group_id: str = Field(..., alias="groupId")
+    group_id: Optional[str] = Field(None, alias="groupId")  # Optional for private sessions
     session_type: str = Field(..., alias="sessionType")  # 'private' or 'joint'
     participants: List[str]
     scheduled_for: Optional[str] = Field(None, alias="scheduledFor")
@@ -95,7 +95,7 @@ class SessionCreate(BaseModel):
 class SessionResponse(CamelCaseModel):
     """Schema for session API responses."""
     id: UUID
-    group_id: UUID  # Frontend uses this as relationshipId
+    group_id: Optional[UUID] = None  # Optional for private sessions without partner
     type: str
     status: str
     participants: List[UUID]

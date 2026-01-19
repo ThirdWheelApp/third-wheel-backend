@@ -101,7 +101,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=True)  # Optional for private sessions
     type = Column(String(50), nullable=False)  # 'private' or 'joint'
     status = Column(String(50), default="active", nullable=False)
 
