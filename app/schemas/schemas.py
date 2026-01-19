@@ -5,7 +5,7 @@ Defines data structures for API endpoints.
 Uses camelCase aliases for frontend compatibility.
 """
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_serializer
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 from uuid import UUID
@@ -22,24 +22,13 @@ class CamelCaseModel(BaseModel):
     Base model that automatically converts snake_case to camelCase.
 
     All response models should inherit from this.
+    Note: UUID fields are typed as UUID and Pydantic v2 auto-serializes to string in JSON.
     """
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,
         alias_generator=to_camel,
     )
-
-    @field_serializer(
-        'id', 'group_id', 'session_id', 'user_id', 'sender_id',
-        'partner1_id', 'partner2_id', 'assigned_to', 'verifier_id',
-        'created_by', 'created_from_session',
-        check_fields=False
-    )
-    def serialize_uuid(self, v):
-        """Convert UUID objects to strings for JSON serialization."""
-        if v is None:
-            return None
-        return str(v) if isinstance(v, UUID) else v
 
 
 # ============================================================================
@@ -57,7 +46,7 @@ class UserCreate(BaseModel):
 
 class UserResponse(CamelCaseModel):
     """Schema for user API responses."""
-    id: str
+    id: UUID
     email: str
     name: str
     created_at: datetime
@@ -81,9 +70,9 @@ class GroupResponse(CamelCaseModel):
     Note: Frontend uses 'relationshipId' for group IDs.
     The 'id' field maps to relationshipId in frontend context.
     """
-    id: str
-    partner1_id: str
-    partner2_id: str
+    id: UUID
+    partner1_id: UUID
+    partner2_id: UUID
     status: str
     created_at: datetime
 
@@ -105,12 +94,12 @@ class SessionCreate(BaseModel):
 
 class SessionResponse(CamelCaseModel):
     """Schema for session API responses."""
-    id: str
-    group_id: str  # Frontend uses this as relationshipId
+    id: UUID
+    group_id: UUID  # Frontend uses this as relationshipId
     type: str
     status: str
-    participants: List[str]
-    created_by: Optional[str] = None
+    participants: List[UUID]
+    created_by: Optional[UUID] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     scheduled_for: Optional[datetime] = None
@@ -124,9 +113,9 @@ class SessionResponse(CamelCaseModel):
 
 class MessageResponse(CamelCaseModel):
     """Schema for message API responses."""
-    id: str
-    session_id: str
-    sender_id: str
+    id: UUID
+    session_id: UUID
+    sender_id: UUID
     sender_name: Optional[str] = None
     content: str
     sequence_number: int
@@ -169,13 +158,13 @@ class CompletionHistoryEntry(CamelCaseModel):
 
 class CheckInResponse(CamelCaseModel):
     """Schema for check-in API responses."""
-    id: str
-    group_id: str  # Frontend uses as relationshipId
+    id: UUID
+    group_id: UUID  # Frontend uses as relationshipId
     title: str
     description: Optional[str] = None
     status: str
-    assigned_to: str
-    verifier_id: Optional[str] = None
+    assigned_to: UUID
+    verifier_id: Optional[UUID] = None
     requires_verification: bool
     assigned_approved: bool = False
     verifier_approved: Optional[bool] = None
@@ -185,7 +174,7 @@ class CheckInResponse(CamelCaseModel):
     duration_days: Optional[int] = None  # Derived from progress.total
     completion_history: Optional[List[CompletionHistoryEntry]] = None
     verification_feedback: Optional[str] = None
-    created_from_session: Optional[str] = None
+    created_from_session: Optional[UUID] = None
     created_at: datetime
 
 
@@ -211,8 +200,8 @@ class CheckInMarkDone(BaseModel):
 
 class NotificationResponse(CamelCaseModel):
     """Schema for notification API responses."""
-    id: str
-    user_id: str
+    id: UUID
+    user_id: UUID
     type: str  # 'check_in_assigned', 'session_end_requested', etc.
     data: Dict[str, Any]
     read: bool
@@ -240,8 +229,8 @@ class WSIncomingMessage(BaseModel):
 class WSOutgoingMessage(CamelCaseModel):
     """Schema for outgoing WebSocket messages to client."""
     type: str  # 'message', 'typing', 'sync', 'error', 'stream_start', etc.
-    message_id: Optional[str] = None
-    sender_id: Optional[str] = None
+    message_id: Optional[UUID] = None
+    sender_id: Optional[UUID] = None
     sender_name: Optional[str] = None
     content: Optional[str] = None
     timestamp: Optional[str] = None
@@ -253,7 +242,7 @@ class WSOutgoingMessage(CamelCaseModel):
     messages: Optional[List[Dict[str, Any]]] = None
 
     # For typing indicators
-    user_id: Optional[str] = None
+    user_id: Optional[UUID] = None
     is_typing: Optional[bool] = None
 
     # For streaming
