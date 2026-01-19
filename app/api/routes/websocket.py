@@ -77,6 +77,8 @@ async def websocket_chat(
         "message": "Error description"
     }
     """
+    logger.info(f">>> WebSocket connection attempt: session={session_id}, user={user_id}")
+
     # Validate JWT token and verify user_id matches
     try:
         token_user_id = get_user_from_token(token)
