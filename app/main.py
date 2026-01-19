@@ -56,11 +56,17 @@ class CamelCaseMiddleware(BaseHTTPMiddleware):
                 camel_data = convert_keys_to_camel(data)
                 new_body = json.dumps(camel_data)
 
+                # Copy headers but exclude Content-Length (will be recalculated)
+                new_headers = {
+                    k: v for k, v in response.headers.items()
+                    if k.lower() != 'content-length'
+                }
+
                 # Create new response with transformed body
                 return Response(
                     content=new_body,
                     status_code=response.status_code,
-                    headers=dict(response.headers),
+                    headers=new_headers,
                     media_type="application/json"
                 )
             except json.JSONDecodeError:
