@@ -16,6 +16,20 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
+@router.get("/ws/test")
+async def websocket_test():
+    """
+    Simple HTTP test endpoint to verify the /ws/ path is reachable.
+    If this works but WebSocket doesn't, it's a Railway proxy issue.
+    """
+    logger.info("WebSocket test endpoint hit")
+    return {
+        "status": "ok",
+        "message": "WebSocket path is reachable via HTTP",
+        "websocket_url_format": "/ws/chat/{session_id}/{user_id}?token=JWT"
+    }
+
+
 @router.websocket("/ws/chat/{session_id}/{user_id}")
 async def websocket_chat(
     websocket: WebSocket,
@@ -77,7 +91,9 @@ async def websocket_chat(
         "message": "Error description"
     }
     """
+    logger.info(f"====== WEBSOCKET ENDPOINT HIT ======")
     logger.info(f">>> WebSocket connection attempt: session={session_id}, user={user_id}")
+    logger.info(f">>> Token length: {len(token) if token else 0}")
 
     # Validate JWT token and verify user_id matches
     try:

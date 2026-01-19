@@ -39,6 +39,10 @@ class CamelCaseMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
+        # Skip WebSocket connections - middleware interferes with upgrade
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
+
         response = await call_next(request)
 
         # Only process JSON responses
@@ -180,6 +184,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
+        # Skip WebSocket connections - BaseHTTPMiddleware interferes with upgrade
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            logger.info(f">>> WEBSOCKET UPGRADE: {request.url.path}")
+            return await call_next(request)
+
         start_time = time.time()
         logger.info(f">>> INCOMING: {request.method} {request.url.path}")
 
