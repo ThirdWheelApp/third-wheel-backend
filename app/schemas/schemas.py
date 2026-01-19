@@ -39,6 +39,8 @@ class UserCreate(BaseModel):
     name: str
     supabase_user_id: Optional[str] = Field(None, alias="supabaseUserId")
 
+    model_config = ConfigDict(populate_by_name=True)
+
 
 class UserResponse(CamelCaseModel):
     """Schema for user API responses."""

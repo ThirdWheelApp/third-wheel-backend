@@ -14,6 +14,7 @@ Key Features:
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
+from fastapi.responses import HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import json
@@ -191,6 +192,77 @@ async def health_check():
         "database": "connected",
         "llm_service": "configured"
     }
+
+
+@app.get("/auth-callback", response_class=HTMLResponse)
+async def auth_callback():
+    """
+    Email confirmation callback page.
+
+    This page is shown to users who confirm their email on mobile devices
+    that can't handle deep links (e.g., Expo Go development).
+
+    For standalone builds (.ipa, App Store), the deep link thirdwheel://auth-callback
+    will open the app directly instead of showing this page.
+    """
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Email Confirmed - Third Wheel</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #FFF9F7 0%, #FFE5E5 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }
+            .container {
+                background: white;
+                border-radius: 16px;
+                padding: 40px;
+                text-align: center;
+                max-width: 400px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            }
+            .icon {
+                width: 80px;
+                height: 80px;
+                background: #FFE5E5;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 24px;
+                font-size: 40px;
+            }
+            h1 {
+                color: #333;
+                font-size: 24px;
+                margin-bottom: 12px;
+            }
+            p {
+                color: #666;
+                font-size: 16px;
+                line-height: 1.5;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">✓</div>
+            <h1>Email Confirmed!</h1>
+            <p>Your email has been verified successfully. You can now return to the Third Wheel app and log in.</p>
+        </div>
+    </body>
+    </html>
+    """
 
 
 if __name__ == "__main__":
