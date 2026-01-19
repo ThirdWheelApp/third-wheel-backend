@@ -11,10 +11,31 @@ from app.db.database import get_db
 from app.websocket.chat_handler import ChatHandler
 from app.utils.auth import get_user_from_token
 from app.utils.logger import get_logger
-from typing import Optional
+from typing import Optional, List
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _get_subprotocols(websocket: WebSocket) -> List[str]:
+    header_value = websocket.headers.get("sec-websocket-protocol")
+    if not header_value:
+        return []
+    return [part.strip() for part in header_value.split(",") if part.strip()]
+
+
+def _get_token_from_subprotocol(websocket: WebSocket) -> Optional[str]:
+    protocols = _get_subprotocols(websocket)
+    if "jwt" not in protocols:
+        return None
+    for protocol in protocols:
+        if protocol != "jwt":
+            return protocol
+    return None
+
+
+def _select_subprotocol(websocket: WebSocket) -> Optional[str]:
+    return "jwt" if "jwt" in _get_subprotocols(websocket) else None
 
 
 def _get_token_from_headers(websocket: WebSocket) -> Optional[str]:
@@ -29,7 +50,8 @@ def _get_token_from_headers(websocket: WebSocket) -> Optional[str]:
 
 def _resolve_token(websocket: WebSocket, token: Optional[str]) -> Optional[str]:
     header_token = _get_token_from_headers(websocket)
-    return header_token or token
+    subprotocol_token = _get_token_from_subprotocol(websocket)
+    return header_token or subprotocol_token or token
 
 
 async def _handle_websocket_chat(
@@ -40,7 +62,14 @@ async def _handle_websocket_chat(
     db: Session,
 ):
     token_value = _resolve_token(websocket, token)
-    token_source = "header" if token_value and token_value == _get_token_from_headers(websocket) else "query"
+    header_token = _get_token_from_headers(websocket)
+    subprotocol_token = _get_token_from_subprotocol(websocket)
+    if token_value and token_value == header_token:
+        token_source = "header"
+    elif token_value and token_value == subprotocol_token:
+        token_source = "subprotocol"
+    else:
+        token_source = "query"
     logger.info(f">>> WebSocket token source: {token_source}, length: {len(token_value) if token_value else 0}")
 
     if not token_value:
@@ -69,7 +98,7 @@ async def _handle_websocket_chat(
         )
 
     handler = ChatHandler(db)
-    await handler.handle_connection(websocket, session_id, token_user_id)
+    await handler.handle_connection(websocket, session_id, token_user_id, _select_subprotocol(websocket))
 
 
 @router.get("/ws/test")
@@ -129,6 +158,7 @@ async def websocket_chat_session(
 
     Token can also be provided via Authorization header:
     Authorization: Bearer <JWT>
+    Or via subprotocol: new WebSocket(url, ['jwt', token])
     """
     logger.info("====== WEBSOCKET ENDPOINT HIT ======")
     logger.info(f">>> WebSocket connection attempt: session={session_id}")

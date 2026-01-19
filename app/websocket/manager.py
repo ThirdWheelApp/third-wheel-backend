@@ -6,7 +6,7 @@ Tracks connections per session and enables broadcasting.
 """
 
 from fastapi import WebSocket
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 from app.utils.logger import get_logger
 import json
 
@@ -46,7 +46,8 @@ class ConnectionManager:
         self,
         session_id: str,
         user_id: str,
-        websocket: WebSocket
+        websocket: WebSocket,
+        subprotocol: Optional[str] = None
     ):
         """
         Accept and register a new WebSocket connection.
@@ -57,7 +58,10 @@ class ConnectionManager:
             websocket: WebSocket connection object
         """
         logger.info(f"manager.connect: Accepting WebSocket for user={user_id}")
-        await websocket.accept()
+        if subprotocol:
+            await websocket.accept(subprotocol=subprotocol)
+        else:
+            await websocket.accept()
         logger.info(f"manager.connect: WebSocket accepted")
 
         # Send immediate ping to verify connection

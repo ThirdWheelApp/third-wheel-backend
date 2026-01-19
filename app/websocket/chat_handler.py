@@ -14,6 +14,7 @@ from app.services.chat_service import ChatService
 from app.utils.message_queue import session_message_queue
 from app.utils.serializers import convert_keys_to_camel
 from app.utils.logger import get_logger
+from typing import Optional
 import json
 
 logger = get_logger(__name__)
@@ -38,7 +39,8 @@ class ChatHandler:
         self,
         websocket: WebSocket,
         session_id: str,
-        user_id: str
+        user_id: str,
+        subprotocol: Optional[str] = None
     ):
         """
         Handle a WebSocket connection for the duration of the session.
@@ -51,7 +53,7 @@ class ChatHandler:
         logger.info(f"handle_connection: Starting for session={session_id}, user={user_id}")
 
         # Connect
-        await manager.connect(session_id, user_id, websocket)
+        await manager.connect(session_id, user_id, websocket, subprotocol=subprotocol)
         logger.info(f"handle_connection: WebSocket accepted and registered")
 
         try:
