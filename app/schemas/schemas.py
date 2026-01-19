@@ -102,7 +102,7 @@ class SessionCreate(BaseModel):
     """Schema for creating a therapy session."""
     group_id: Optional[str] = Field(None, alias="groupId")  # Optional for private sessions
     session_type: str = Field(..., alias="sessionType")  # 'private' or 'joint'
-    participants: List[str]
+    participants: List[str] = Field(..., min_length=1)  # Require at least 1 participant
     scheduled_for: Optional[str] = Field(None, alias="scheduledFor")
     invite_message: Optional[str] = Field(None, alias="inviteMessage")
 

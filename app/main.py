@@ -14,7 +14,8 @@ Key Features:
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import json
@@ -136,6 +137,30 @@ app.add_middleware(
 # Add camelCase middleware for JSON responses
 # Note: Middleware order matters - CamelCase runs after CORS
 app.add_middleware(CamelCaseMiddleware)
+
+
+# Add validation exception handler for debugging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Custom handler for request validation errors.
+    Logs detailed error information to help debug issues.
+    """
+    logger.error(f"Validation error for {request.method} {request.url.path}")
+    logger.error(f"Validation errors: {exc.errors()}")
+
+    # Try to log the request body for debugging
+    try:
+        body = await request.body()
+        logger.error(f"Request body: {body.decode('utf-8')[:500]}")  # First 500 chars
+    except Exception as e:
+        logger.error(f"Could not read request body: {e}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
+
 
 # Register API routes
 app.include_router(
