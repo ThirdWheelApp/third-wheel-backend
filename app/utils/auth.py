@@ -5,6 +5,8 @@ Handles JWT validation from Supabase auth tokens.
 Used to protect WebSocket connections and API endpoints.
 """
 
+import base64
+import json
 from jose import jwt, JWTError
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -32,6 +34,19 @@ def verify_token(token: str) -> dict:
         HTTPException: If token is invalid or expired
     """
     try:
+        # DEBUG: Log the token header to see what algorithm it claims
+        try:
+            header_b64 = token.split('.')[0]
+            # Add padding if needed for base64 decoding
+            padding = 4 - len(header_b64) % 4
+            if padding != 4:
+                header_b64 += '=' * padding
+            header = json.loads(base64.urlsafe_b64decode(header_b64))
+            logger.info(f"JWT Token header: {header}")
+            logger.info(f"JWT Secret (first 10 chars): {settings.SUPABASE_JWT_SECRET[:10]}...")
+        except Exception as debug_err:
+            logger.warning(f"Debug logging failed: {debug_err}")
+
         # Decode JWT using Supabase JWT secret
         payload = jwt.decode(
             token,
@@ -41,6 +56,7 @@ def verify_token(token: str) -> dict:
         )
         return payload
     except JWTError as e:
+        logger.error(f"JWT verification failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication credentials: {str(e)}",
