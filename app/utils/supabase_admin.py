@@ -9,17 +9,20 @@ Security Note:
     on the client side. Only use this for server-side operations.
 """
 
-from supabase import create_client, Client
 from app.config.settings import settings
 from app.utils.logger import get_logger
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+# Lazy import to avoid dependency issues at startup
+if TYPE_CHECKING:
+    from supabase import Client
 
 logger = get_logger(__name__)
 
-_supabase_admin: Optional[Client] = None
+_supabase_admin: Optional["Client"] = None
 
 
-def get_supabase_admin() -> Client:
+def get_supabase_admin() -> "Client":
     """
     Get Supabase admin client with service role key.
 
@@ -42,6 +45,9 @@ def get_supabase_admin() -> Client:
                 "SUPABASE_SERVICE_ROLE_KEY not configured. "
                 "This is required for partner invitation feature."
             )
+
+        # Lazy import to avoid dependency issues
+        from supabase import create_client
 
         logger.info("Initializing Supabase admin client")
         _supabase_admin = create_client(
