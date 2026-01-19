@@ -2,7 +2,7 @@
 Authentication Utilities
 
 Handles JWT validation from Supabase auth tokens.
-Uses Supabase's JWKS endpoint for ES256 token verification.
+Uses Supabase JWT secret for HS256 tokens and JWKS for asymmetric tokens.
 """
 
 import json
@@ -122,8 +122,8 @@ def verify_token(token: str) -> dict:
     """
     Verify and decode a Supabase JWT token.
 
-    Supabase uses ES256 algorithm with asymmetric keys.
-    We fetch the public key from Supabase's JWKS endpoint.
+    Supabase issues HS256 tokens signed with the project JWT secret.
+    Some deployments may use asymmetric keys and publish JWKS with a key ID.
 
     Args:
         token: JWT token string from client
@@ -135,24 +135,41 @@ def verify_token(token: str) -> dict:
         HTTPException: If token is invalid or expired
     """
     try:
-        # Get the signing key for this token
-        signing_key = get_signing_key(token)
-
-        # Get algorithm from token header
         unverified_header = jwt.get_unverified_header(token)
-        alg = unverified_header.get("alg", "ES256")
+        alg = unverified_header.get("alg", "HS256")
+        kid = unverified_header.get("kid")
 
-        # Decode and verify the token
-        payload = jwt.decode(
-            token,
-            signing_key,
-            algorithms=[alg],
-            audience="authenticated"
-        )
+        if alg == "HS256":
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience="authenticated"
+            )
+        elif alg in {"ES256", "RS256"}:
+            if not kid:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token missing key ID"
+                )
+            signing_key = get_signing_key(token)
+            payload = jwt.decode(
+                token,
+                signing_key,
+                algorithms=[alg],
+                audience="authenticated"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Unsupported token algorithm: {alg}"
+            )
 
         logger.debug(f"Token verified successfully for user: {payload.get('sub')}")
         return payload
 
+    except HTTPException:
+        raise
     except JWTError as e:
         logger.error(f"JWT verification failed: {str(e)}")
         raise HTTPException(
