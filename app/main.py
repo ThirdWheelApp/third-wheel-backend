@@ -83,6 +83,31 @@ class CamelCaseMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def run_schema_migrations():
+    """
+    Run any pending schema migrations.
+
+    This handles alterations that create_all() doesn't cover.
+    Each migration is idempotent (safe to run multiple times).
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        # Migration: Make sessions.group_id nullable for private sessions
+        # Private sessions can exist without a group (solo user, no partner yet)
+        try:
+            conn.execute(text("""
+                ALTER TABLE sessions ALTER COLUMN group_id DROP NOT NULL
+            """))
+            conn.commit()
+            logger.info("Migration: sessions.group_id is now nullable")
+        except Exception as e:
+            # Column might already be nullable - that's fine
+            if "cannot alter" not in str(e).lower() and "already" not in str(e).lower():
+                logger.warning(f"Migration warning (group_id): {e}")
+            conn.rollback()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -95,6 +120,12 @@ async def lifespan(app: FastAPI):
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created successfully")
+
+    # Run schema migrations for existing tables
+    logger.info("Running schema migrations...")
+    run_schema_migrations()
+    logger.info("Schema migrations complete")
+
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"LLM Model: {settings.LLM_MODEL}")
 
