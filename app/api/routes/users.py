@@ -9,7 +9,7 @@ from app.db.database import get_db
 from app.db.models import User
 from app.schemas.schemas import UserCreate, UserResponse, InvitePartnerRequest, InvitePartnerResponse
 from app.utils.auth import get_current_user, get_current_user_optional
-from app.utils.supabase_admin import get_supabase_admin, is_admin_configured
+from app.utils.supabase_admin import invite_user_by_email, is_admin_configured
 from app.utils.logger import get_logger
 import uuid
 
@@ -168,19 +168,14 @@ async def invite_partner(
         inviter_name = invite_data.inviter_name
 
     try:
-        supabase = get_supabase_admin()
-
-        logger.info(f"Sending Supabase invitation to {invite_data.partner_email}")
-
-        # Invite the partner using Supabase admin API
-        response = supabase.auth.admin.invite_user_by_email(
-            invite_data.partner_email,
-            options={
-                "redirect_to": "thirdwheel://signup",  # Deep link to app
-                "data": {
-                    "invited_by": inviter_id,
-                    "inviter_name": inviter_name
-                }
+        # Send invitation using direct HTTP call to Supabase Admin API
+        # This avoids dependency issues with the supabase-py client
+        await invite_user_by_email(
+            email=invite_data.partner_email,
+            redirect_to="thirdwheel://signup",  # Deep link to app
+            data={
+                "invited_by": inviter_id,
+                "inviter_name": inviter_name
             }
         )
 

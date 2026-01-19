@@ -209,15 +209,19 @@ async def get_current_user(
     Raises:
         HTTPException: If token is missing or invalid
     """
+    logger.info("get_current_user: Starting authentication")
     token = credentials.credentials
-    logger.debug(f"Authenticating request with token: {token[:20]}...")
+    logger.info(f"get_current_user: Token received (first 20 chars): {token[:20]}...")
 
     try:
         user_id = get_user_from_token(token)
-        logger.debug(f"Authentication successful for user: {user_id}")
+        logger.info(f"get_current_user: Authentication successful for user: {user_id}")
         return user_id
     except HTTPException as e:
-        logger.warning(f"Authentication failed: {e.detail}")
+        logger.warning(f"get_current_user: Authentication failed: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"get_current_user: Unexpected error: {e}", exc_info=True)
         raise
 
 
