@@ -7,4 +7,11 @@ PORT="${PORT:-8000}"
 # Enable debug logging to diagnose WebSocket connection issues
 # --ws websockets: explicitly use websockets library (not wsproto)
 # --log-level info: show connection-level logs
-exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --ws websockets --log-level info
+# --ws-ping-interval/timeout: keep Railway WebSocket connections alive
+exec uvicorn app.main:app \
+  --host 0.0.0.0 \
+  --port "$PORT" \
+  --ws websockets \
+  --ws-ping-interval 30 \
+  --ws-ping-timeout 30 \
+  --log-level info

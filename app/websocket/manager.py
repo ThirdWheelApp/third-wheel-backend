@@ -6,6 +6,7 @@ Tracks connections per session and enables broadcasting.
 """
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 from typing import Dict, List, Set, Optional
 from app.utils.logger import get_logger
 import json
@@ -58,11 +59,14 @@ class ConnectionManager:
             websocket: WebSocket connection object
         """
         logger.info(f"manager.connect: Accepting WebSocket for user={user_id}")
-        if subprotocol:
-            await websocket.accept(subprotocol=subprotocol)
+        if getattr(websocket, "application_state", None) != WebSocketState.CONNECTED:
+            if subprotocol:
+                await websocket.accept(subprotocol=subprotocol)
+            else:
+                await websocket.accept()
+            logger.info("manager.connect: WebSocket accepted")
         else:
-            await websocket.accept()
-        logger.info(f"manager.connect: WebSocket accepted")
+            logger.info("manager.connect: WebSocket already accepted")
 
         # Send immediate ping to verify connection
         try:

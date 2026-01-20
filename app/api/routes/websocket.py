@@ -6,6 +6,7 @@ Handles WebSocket connections for real-time chat.
 
 from fastapi import APIRouter, WebSocket, Depends, Query, status
 from fastapi.exceptions import WebSocketException
+from starlette.websockets import WebSocketState
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.websocket.chat_handler import ChatHandler
@@ -38,6 +39,16 @@ def _select_subprotocol(websocket: WebSocket) -> Optional[str]:
     return "jwt" if "jwt" in _get_subprotocols(websocket) else None
 
 
+async def _accept_websocket(websocket: WebSocket, subprotocol: Optional[str]) -> None:
+    if getattr(websocket, "application_state", None) == WebSocketState.CONNECTED:
+        logger.info("WebSocket already accepted; skipping accept.")
+        return
+    if subprotocol:
+        await websocket.accept(subprotocol=subprotocol)
+    else:
+        await websocket.accept()
+
+
 def _get_token_from_headers(websocket: WebSocket) -> Optional[str]:
     auth_header = websocket.headers.get("authorization")
     if not auth_header:
@@ -61,6 +72,9 @@ async def _handle_websocket_chat(
     token: Optional[str],
     db: Session,
 ):
+    selected_subprotocol = _select_subprotocol(websocket)
+    await _accept_websocket(websocket, selected_subprotocol)
+
     token_value = _resolve_token(websocket, token)
     header_token = _get_token_from_headers(websocket)
     subprotocol_token = _get_token_from_subprotocol(websocket)
@@ -73,32 +87,40 @@ async def _handle_websocket_chat(
     logger.info(f">>> WebSocket token source: {token_source}, length: {len(token_value) if token_value else 0}")
 
     if not token_value:
-        raise WebSocketException(
+        logger.warning("WebSocket authentication failed: missing token")
+        await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason="Missing authentication token"
+            reason="Missing authentication token",
         )
+        return
 
     # Validate JWT token and verify user_id matches (if provided)
     try:
         token_user_id = get_user_from_token(token_value)
         if user_id and token_user_id != user_id:
             logger.warning(f"User ID mismatch: path={user_id}, token={token_user_id}")
-            raise WebSocketException(
+            await websocket.close(
                 code=status.WS_1008_POLICY_VIOLATION,
-                reason="User ID does not match token"
+                reason="User ID does not match token",
             )
+            return
         logger.info(f"WebSocket authentication successful for user {token_user_id}")
     except WebSocketException:
-        raise
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Invalid or expired authentication token",
+        )
+        return
     except Exception as e:
         logger.warning(f"WebSocket authentication failed: {str(e)}")
-        raise WebSocketException(
+        await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason="Invalid or expired authentication token"
+            reason="Invalid or expired authentication token",
         )
+        return
 
     handler = ChatHandler(db)
-    await handler.handle_connection(websocket, session_id, token_user_id, _select_subprotocol(websocket))
+    await handler.handle_connection(websocket, session_id, token_user_id, selected_subprotocol)
 
 
 @router.get("/ws/test")
