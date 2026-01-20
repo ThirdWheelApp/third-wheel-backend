@@ -138,6 +138,56 @@ def run_schema_migrations():
                 logger.warning(f"Migration warning (group_id): {e}")
             conn.rollback()
 
+        # Migration: Ensure user foreign keys cascade on update
+        try:
+            conn.execute(text("""
+                ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_created_by_fkey;
+                ALTER TABLE sessions
+                    ADD CONSTRAINT sessions_created_by_fkey
+                    FOREIGN KEY (created_by) REFERENCES users(id) ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_partner1_id_fkey;
+                ALTER TABLE groups
+                    ADD CONSTRAINT groups_partner1_id_fkey
+                    FOREIGN KEY (partner1_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_partner2_id_fkey;
+                ALTER TABLE groups
+                    ADD CONSTRAINT groups_partner2_id_fkey
+                    FOREIGN KEY (partner2_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE private_user_context DROP CONSTRAINT IF EXISTS private_user_context_user_id_fkey;
+                ALTER TABLE private_user_context
+                    ADD CONSTRAINT private_user_context_user_id_fkey
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE check_ins DROP CONSTRAINT IF EXISTS check_ins_assigned_to_fkey;
+                ALTER TABLE check_ins
+                    ADD CONSTRAINT check_ins_assigned_to_fkey
+                    FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE check_ins DROP CONSTRAINT IF EXISTS check_ins_verifier_id_fkey;
+                ALTER TABLE check_ins
+                    ADD CONSTRAINT check_ins_verifier_id_fkey
+                    FOREIGN KEY (verifier_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE;
+            """))
+            conn.execute(text("""
+                ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_user_id_fkey;
+                ALTER TABLE notifications
+                    ADD CONSTRAINT notifications_user_id_fkey
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE;
+            """))
+            conn.commit()
+            logger.info("Migration: user foreign keys now cascade on update")
+        except Exception as e:
+            logger.warning(f"Migration warning (user FK cascades): {e}")
+            conn.rollback()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

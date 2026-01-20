@@ -66,8 +66,16 @@ class Group(Base):
     __tablename__ = "groups"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    partner1_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    partner2_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    partner1_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    partner2_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
     status = Column(String(50), default="active", nullable=False)  # 'active', 'inactive'
 
     created_at = Column(DateTime, default=func.now(), nullable=False)
@@ -105,7 +113,11 @@ class Session(Base):
     type = Column(String(50), nullable=False)  # 'private' or 'joint'
     status = Column(String(50), default="active", nullable=False)
 
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_by = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", onupdate="CASCADE"),
+        nullable=True,
+    )
     participants = Column(ARRAY(UUID(as_uuid=True)), nullable=False)  # List of user UUIDs
 
     # Context accumulated during session (not committed to context tables)
@@ -189,7 +201,11 @@ class PrivateUserContext(Base):
     __tablename__ = "private_user_context"
 
     # Composite primary key columns
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        primary_key=True,
+    )
     group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
     context_id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True)
 
@@ -258,8 +274,16 @@ class CheckIn(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
 
-    assigned_to = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    verifier_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    assigned_to = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    verifier_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", onupdate="CASCADE"),
+        nullable=True,
+    )
 
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
@@ -349,7 +373,11 @@ class Notification(Base):
     __tablename__ = "notifications"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
 
     type = Column(String(100), nullable=False)  # notification type identifier
 

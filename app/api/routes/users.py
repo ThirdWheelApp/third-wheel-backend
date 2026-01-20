@@ -4,6 +4,7 @@ User API Routes
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import Optional
 from app.db.database import get_db
 from app.db.models import User
@@ -49,8 +50,29 @@ async def initialize_user(
     ).first()
 
     if existing_by_email:
-        # User re-signed up with new Supabase account - update their ID
-        existing_by_email.id = uuid.UUID(user_data.supabase_user_id)
+        # User re-signed up with new Supabase account - migrate their ID
+        new_id = uuid.UUID(user_data.supabase_user_id)
+        if existing_by_email.id != new_id:
+            old_id = existing_by_email.id
+            logger.warning(
+                "User email already exists with different ID; migrating user ID "
+                f"old_id={old_id} new_id={new_id}"
+            )
+
+            # Update array references that are not covered by FK cascades.
+            db.execute(
+                text(
+                    """
+                    UPDATE sessions
+                    SET participants = array_replace(participants, :old_id, :new_id)
+                    WHERE :old_id = ANY(participants)
+                    """
+                ),
+                {"old_id": old_id, "new_id": new_id},
+            )
+
+            existing_by_email.id = new_id
+
         existing_by_email.name = user_data.name  # Update name too in case it changed
         db.commit()
         db.refresh(existing_by_email)
