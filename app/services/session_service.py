@@ -252,5 +252,5 @@ class SessionService:
         """Get sessions with pending actions for a user."""
         return self.db.query(SessionModel).filter(
             SessionModel.status == 'pending_actions',
-            SessionModel.participants.contains([uuid.UUID(user_id)])
+            SessionModel.participants.any(uuid.UUID(user_id))
         ).all()

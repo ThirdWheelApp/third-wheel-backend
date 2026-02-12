@@ -85,7 +85,7 @@ async def get_my_sessions(
     """
     current_user_uuid = uuid.UUID(current_user_id)
     query = db.query(SessionModel).filter(
-        SessionModel.participants.contains([current_user_uuid])
+        SessionModel.participants.any(current_user_uuid)
     )
 
     if session_type:
