@@ -76,8 +76,8 @@ async def invite_user_by_email(
     }
 
     if redirect_to:
-        payload["data"] = data or {}
-        payload["data"]["redirect_to"] = redirect_to
+        # Supabase expects redirect_to at top-level payload key.
+        payload["redirect_to"] = redirect_to
 
     if data:
         payload["data"] = {**payload.get("data", {}), **data}

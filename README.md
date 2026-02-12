@@ -146,6 +146,7 @@ curl https://your-app.railway.app/health
 - `POST /api/users/initialize` - Initialize after signup (no auth required)
 - `GET /api/users/me` - Get current user profile
 - `GET /api/users/{id}` - Get user by ID
+- `POST /api/users/invite-partner` - Send partner invitation email
 
 ### Groups
 - `GET /api/groups/my-groups` - Get user's groups
@@ -252,6 +253,8 @@ All configuration via environment variables:
 | `SUPABASE_URL` | Yes | - | Supabase project URL |
 | `SUPABASE_ANON_KEY` | Yes | - | Supabase anon/public key |
 | `SUPABASE_JWT_SECRET` | Yes | - | Supabase JWT secret |
+| `SUPABASE_SERVICE_ROLE_KEY` | For invites | - | Required for `invite-partner` endpoint |
+| `INVITE_REDIRECT_URL` | No | request origin or deep link | Redirect URL used in invite emails |
 | `DEMO_MODE` | No | false | Use mock LLM responses |
 | `ANTHROPIC_API_KEY` | If !demo | - | Anthropic API key |
 | `LLM_MODEL` | No | claude-3-haiku | Model to use |

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # Service role key for admin operations (e.g., inviteUserByEmail)
     # Optional - only needed for partner invitation feature
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    # Redirect URL used in Supabase partner invitation emails.
+    # Example values:
+    # - Production web: https://your-frontend-domain.com
+    # - Local web: http://localhost:8082
+    # - Native deep link: thirdwheel://signup
+    INVITE_REDIRECT_URL: Optional[str] = None
 
     # ==========================================
     # DEMO MODE CONFIGURATION

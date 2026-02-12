@@ -2,7 +2,7 @@
 User API Routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional
@@ -12,6 +12,7 @@ from app.schemas.schemas import UserCreate, UserResponse, InvitePartnerRequest, 
 from app.utils.auth import get_current_user, get_current_user_optional
 from app.utils.supabase_admin import invite_user_by_email, is_admin_configured
 from app.utils.logger import get_logger
+from app.config.settings import settings
 import uuid
 
 logger = get_logger(__name__)
@@ -141,6 +142,7 @@ async def get_user(
 
 @router.post("/invite-partner", response_model=InvitePartnerResponse)
 async def invite_partner(
+    request: Request,
     invite_data: InvitePartnerRequest,
     current_user_id: Optional[str] = Depends(get_current_user_optional),
     db: Session = Depends(get_db)
@@ -190,11 +192,22 @@ async def invite_partner(
         inviter_name = invite_data.inviter_name
 
     try:
+        # Redirect priority:
+        # 1) Explicit configured URL (recommended for production)
+        # 2) Request origin (useful for local web testing)
+        # 3) Native deep link fallback
+        request_origin = request.headers.get("origin")
+        redirect_to = settings.INVITE_REDIRECT_URL
+        if not redirect_to and request_origin and request_origin.startswith(("http://", "https://")):
+            redirect_to = request_origin
+        if not redirect_to:
+            redirect_to = "thirdwheel://signup"
+
         # Send invitation using direct HTTP call to Supabase Admin API
         # This avoids dependency issues with the supabase-py client
         await invite_user_by_email(
             email=invite_data.partner_email,
-            redirect_to="thirdwheel://signup",  # Deep link to app
+            redirect_to=redirect_to,
             data={
                 "invited_by": inviter_id,
                 "inviter_name": inviter_name
