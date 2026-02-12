@@ -114,7 +114,7 @@ class PrivateAgentRepository:
 
         Args:
             contexts: List of context dictionaries
-            max_level: Maximum secret level to include (1-10)
+            max_level: Maximum secret level to include (0-10)
 
         Returns:
             Filtered list of contexts

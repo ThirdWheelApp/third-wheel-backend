@@ -163,7 +163,7 @@ Message from {state['sender_name']}: {state['user_input']}
 
 Provide a concise summary (2-3 sentences) of relevant patterns, history, or context that would help the couples therapist respond effectively. If nothing is relevant, say "No specific context available."
 
-IMPORTANT: Only share information with secret_level <= {settings.SECRET_LEVEL_THRESHOLD}."""
+IMPORTANT: Only share information with secret_level <= {settings.COUPLES_MAX_SECRET_LEVEL}."""
 
         # Query Private Agent A
         if (private_agent_a and

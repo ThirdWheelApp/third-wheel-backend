@@ -5,6 +5,7 @@ CheckIn API Routes
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+from app.db.models import Session as SessionModel
 from app.services.checkin_service import CheckInService
 from app.schemas.schemas import (
     CheckInResponse,
@@ -13,6 +14,7 @@ from app.schemas.schemas import (
 )
 from app.utils.auth import get_current_user
 from typing import List
+import uuid
 
 router = APIRouter()
 
@@ -29,6 +31,16 @@ async def get_proposed_checkins(
     Requires authentication. User must be a participant in the session.
     Called after session ends to show check-ins needing approval.
     """
+    session = db.query(SessionModel).filter(
+        SessionModel.id == uuid.UUID(session_id)
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if uuid.UUID(current_user_id) not in session.participants:
+        raise HTTPException(status_code=403, detail="Not authorized to access this session")
+
     service = CheckInService(db)
     checkins = service.get_proposed_checkins_for_session(session_id)
     return checkins
@@ -176,7 +188,6 @@ async def get_checkin(
         raise HTTPException(status_code=404, detail="Check-in not found")
 
     # Authorization: User must be involved in this check-in
-    import uuid
     current_user_uuid = uuid.UUID(current_user_id)
 
     if checkin.assigned_to != current_user_uuid and checkin.verifier_id != current_user_uuid:

@@ -5,10 +5,13 @@ Session API Routes
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+from app.db.models import Session as SessionModel, Message
 from app.services.session_service import SessionService
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
 from app.utils.logger import get_logger
+from typing import List
+import uuid
 
 logger = get_logger(__name__)
 
@@ -43,6 +46,9 @@ async def create_session(
             detail="Group ID is required for joint sessions"
         )
 
+    if current_user_id not in session_data.participants:
+        session_data.participants.append(current_user_id)
+
     try:
         service = SessionService(db)
 
@@ -65,6 +71,30 @@ async def create_session(
             status_code=500,
             detail=f"Failed to create session: {str(e)}"
         )
+
+
+@router.get("/my", response_model=List[SessionResponse])
+async def get_my_sessions(
+    session_type: str = None,
+    status: str = None,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List sessions where current user is a participant.
+    """
+    current_user_uuid = uuid.UUID(current_user_id)
+    query = db.query(SessionModel).filter(
+        SessionModel.participants.contains([current_user_uuid])
+    )
+
+    if session_type:
+        query = query.filter(SessionModel.type == session_type)
+    if status:
+        query = query.filter(SessionModel.status == status)
+
+    sessions = query.order_by(SessionModel.created_at.desc()).all()
+    return sessions
 
 
 @router.post("/{session_id}/request-end")
@@ -119,7 +149,6 @@ async def get_session(
 
     # Authorization: User must be a participant in the session
     # Convert current_user_id to UUID for comparison
-    import uuid
     current_user_uuid = uuid.UUID(current_user_id)
 
     if current_user_uuid not in session.participants:
@@ -129,3 +158,49 @@ async def get_session(
         )
 
     return session
+
+
+@router.get("/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    limit: int = 200,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get chronological message transcript for a session.
+    """
+    session = db.query(SessionModel).filter(
+        SessionModel.id == uuid.UUID(session_id)
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    current_user_uuid = uuid.UUID(current_user_id)
+    if current_user_uuid not in session.participants:
+        raise HTTPException(status_code=403, detail="Not authorized to access this session")
+
+    msgs = (
+        db.query(Message)
+        .filter(Message.session_id == uuid.UUID(session_id))
+        .order_by(Message.sequence_number.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    msgs.reverse()
+
+    return {
+        "sessionId": session_id,
+        "messages": [
+            {
+                "messageId": str(m.id),
+                "senderId": m.sender_id,
+                "senderName": m.sender_name,
+                "content": m.content,
+                "timestamp": m.timestamp.isoformat(),
+                "sequenceNumber": m.sequence_number,
+                "metadata": m.message_metadata
+            }
+            for m in msgs
+        ]
+    }

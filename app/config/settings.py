@@ -90,9 +90,13 @@ class Settings(BaseSettings):
     # TODO: Replace with vector search when scaling
     MAX_CONTEXTS_PER_LOAD: int = 50
 
-    # Secret level threshold for sharing in group sessions (1-10)
+    # Secret level threshold for sharing in group sessions (0-10)
     # Only contexts with secret_level <= this value are shared
     SECRET_LEVEL_THRESHOLD: int = 5
+
+    # Couples sessions must never directly reveal private context unless level is 0.
+    # Hard-zero policy for the POC.
+    COUPLES_MAX_SECRET_LEVEL: int = 0
 
     # ==========================================
     # SERVER CONFIGURATION

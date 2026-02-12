@@ -121,7 +121,7 @@ PRIVATE_AGENT_SYSTEM_PROMPT = """You are an AI therapist providing individual co
 PRIVATE_AGENT_GROUP_QUERY_PROMPT = """You are responding to a query from the joint therapy agent about a user.
 
 **CRITICAL PRIVACY RULES:**
-- Only share information with secret_level <= 5
+- Only share information with secret_level <= 0
 - NEVER reveal high-sensitivity information (levels 6-10)
 - Frame responses in general terms, not specific events
 - Focus on patterns, not secrets
@@ -142,7 +142,7 @@ PRIVATE_AGENT_PARTNER_QUERY_PROMPT = """You are a private therapist agent respon
 This communication channel allows private agents to share appropriate context to help provide better therapy.
 
 **CRITICAL PRIVACY RULES:**
-- Only share information with secret_level <= 4 (stricter than group queries)
+- Only share information with secret_level <= 0
 - NEVER reveal specific private conversations or events
 - Focus on general patterns, communication preferences, and relationship dynamics
 - Frame everything in terms of "this person tends to..." not "they told me..."
@@ -176,10 +176,11 @@ CONTEXT_EXTRACTION_SYSTEM_PROMPT = """You are analyzing a therapy session to ext
 **Your Task:**
 1. Identify important information about each user
 2. Identify shared relationship dynamics
-3. Classify sensitivity level for each piece of information (1-10)
+3. Classify sensitivity level for each piece of information (0-10)
 4. Extract potential check-in items
 
-**Sensitivity Classification (1-10):**
+**Sensitivity Classification (0-10):**
+0: Explicitly safe for couples-session sharing
 1-2: General preferences, neutral observations
 3-4: Mild frustrations, everyday concerns
 5-6: Significant concerns, patterns affecting relationship
@@ -196,8 +197,8 @@ CONTEXT_EXTRACTION_SYSTEM_PROMPT = """You are analyzing a therapy session to ext
 
 CONTEXT_EXTRACTION_PROMPT_TEMPLATE = """Analyze this therapy session and extract:
 
-1. **User A Contexts:** Key insights about User A (with secret_level 1-10 for each)
-2. **User B Contexts:** Key insights about User B (with secret_level 1-10 for each)
+1. **User A Contexts:** Key insights about User A (with secret_level 0-10 for each)
+2. **User B Contexts:** Key insights about User B (with secret_level 0-10 for each)
 3. **Group Contexts:** Shared relationship dynamics and patterns
 4. **Check-ins:** Actionable items that could become regular practices
 
@@ -237,8 +238,9 @@ Return a JSON object with this structure:
 # SECRET LEVEL CLASSIFICATION PROMPT
 # ============================================================================
 
-SECRET_LEVEL_CLASSIFICATION_PROMPT = """Classify the sensitivity level of this information on a scale of 1-10:
+SECRET_LEVEL_CLASSIFICATION_PROMPT = """Classify the sensitivity level of this information on a scale of 0-10:
 
+0: Explicitly safe for couples-session sharing
 1-2: Neutral, can be openly discussed
 3-4: Mild sensitivity, can be referenced generally
 5-6: Moderate sensitivity, use carefully
@@ -250,7 +252,7 @@ SECRET_LEVEL_CLASSIFICATION_PROMPT = """Classify the sensitivity level of this i
 **User Indicators:** {user_indicators}
 (Did the user say "this is private", "don't tell anyone", "secret", etc.?)
 
-Return just the number 1-10."""
+Return just the number 0-10."""
 
 # ============================================================================
 # HELPER FUNCTIONS

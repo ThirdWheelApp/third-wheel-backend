@@ -211,6 +211,12 @@ class CheckInMarkDone(BaseModel):
     notes: Optional[str] = None
 
 
+class TaskDecisionRequest(BaseModel):
+    """Schema for assignee decision on a proposed task."""
+    decision: str  # 'accepted' | 'rejected'
+    reason: Optional[str] = None
+
+
 # ============================================================================
 # Notification Schemas
 # ============================================================================

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Session as SessionModel, Message, CheckIn
 from app.services.context_service import ContextService
 from app.services.checkin_service import CheckInService
+from app.services.therapist_notes_service import TherapistNotesService
 import uuid
 from datetime import datetime
 from typing import Dict, List
@@ -30,6 +31,7 @@ class SessionService:
         self.db = db
         self.context_service = ContextService(db)
         self.checkin_service = CheckInService(db)
+        self.notes_service = TherapistNotesService(db)
 
     def create_session(
         self,
@@ -95,6 +97,10 @@ class SessionService:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
+        requester = uuid.UUID(user_id)
+        if requester not in session.participants:
+            raise ValueError("Not authorized to end this session")
+
         # Update status
         session.status = 'pending_conclusion'
         session.end_requested_by = uuid.UUID(user_id)
@@ -134,6 +140,10 @@ class SessionService:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
+        requester = uuid.UUID(user_id)
+        if requester not in session.participants:
+            raise ValueError("Not authorized to end this session")
+
         # Set to ending status (locked for processing)
         session.status = 'ending'
         session.ended_at = datetime.utcnow()
@@ -145,6 +155,19 @@ class SessionService:
             if session.group_id is None:
                 session.status = 'concluded'
                 self.db.commit()
+                try:
+                    self.notes_service.create_summary_note(
+                        session_id=session_id,
+                        scope=session.type,
+                        summary_payload={
+                            "session_id": str(session.id),
+                            "contexts_extracted": 0,
+                            "checkins_proposed": 0,
+                            "ended_at": session.ended_at.isoformat() if session.ended_at else None
+                        }
+                    )
+                except Exception:
+                    pass
                 return {
                     'session_id': str(session.id),
                     'status': session.status,
@@ -167,6 +190,23 @@ class SessionService:
             # Update session status
             session.status = 'pending_actions' if check_ins else 'concluded'
             self.db.commit()
+
+            try:
+                self.notes_service.create_summary_note(
+                    session_id=session_id,
+                    scope=session.type,
+                    summary_payload={
+                        "session_id": str(session.id),
+                        "contexts_extracted": len(extracted_data.get('user_a_contexts', [])) +
+                                            len(extracted_data.get('user_b_contexts', [])) +
+                                            len(extracted_data.get('group_contexts', [])),
+                        "checkins_proposed": len(check_ins),
+                        "ended_at": session.ended_at.isoformat() if session.ended_at else None
+                    }
+                )
+            except Exception:
+                # Summary note failures should not break session completion.
+                pass
 
             return {
                 'session_id': str(session.id),

@@ -209,6 +209,12 @@ class ContextService:
             # Apply secret level boosts based on user messages
             self._apply_secret_level_boosts(extracted_data, messages)
 
+            # Enforce session-type data boundaries before persisting.
+            extracted_data = self._normalize_extracted_data_for_session(
+                session=session,
+                extracted_data=extracted_data
+            )
+
             # Save contexts to database
             await self._save_contexts(
                 session,
@@ -226,6 +232,37 @@ class ContextService:
                 'check_ins': [],
                 'error': str(e)
             }
+
+    def _normalize_extracted_data_for_session(
+        self,
+        session: SessionModel,
+        extracted_data: Dict
+    ) -> Dict:
+        """
+        Enforce data boundaries by session type.
+
+        POC privacy policy:
+        - Private sessions can write private user context only.
+        - Group context and check-ins are created from joint sessions only.
+        """
+        normalized = {
+            'user_a_contexts': extracted_data.get('user_a_contexts', []) or [],
+            'user_b_contexts': extracted_data.get('user_b_contexts', []) or [],
+            'group_contexts': extracted_data.get('group_contexts', []) or [],
+            'check_ins': extracted_data.get('check_ins', []) or [],
+        }
+
+        if session.type == 'private':
+            merged_private_contexts = (
+                list(normalized['user_a_contexts']) +
+                list(normalized['user_b_contexts'])
+            )
+            normalized['user_a_contexts'] = merged_private_contexts
+            normalized['user_b_contexts'] = []
+            normalized['group_contexts'] = []
+            normalized['check_ins'] = []
+
+        return normalized
 
     def _apply_secret_level_boosts(self, extracted_data: Dict, messages: List) -> None:
         """
@@ -275,8 +312,8 @@ class ContextService:
                     )
                     self.db.add(context)
 
-            # Save private contexts for User B
-            if len(session.participants) >= 2:
+            # Save private contexts for User B (joint sessions only)
+            if session.type == 'joint' and len(session.participants) >= 2:
                 user_b_id = session.participants[1]
                 for ctx_data in extracted_data.get('user_b_contexts', []):
                     context = PrivateUserContext(
@@ -292,20 +329,21 @@ class ContextService:
                     )
                     self.db.add(context)
 
-            # Save group contexts
-            for ctx_data in extracted_data.get('group_contexts', []):
-                context = GroupContext(
-                    group_id=session.group_id,
-                    context_id=uuid.uuid4(),
-                    data={
-                        **ctx_data,
-                        'created_at': datetime.utcnow().isoformat(),
-                        'source_session_id': str(session.id),
-                        'participants': [str(p) for p in session.participants]
-                    },
-                    created_at=datetime.utcnow()
-                )
-                self.db.add(context)
+            # Save group contexts (joint sessions only)
+            if session.type == 'joint':
+                for ctx_data in extracted_data.get('group_contexts', []):
+                    context = GroupContext(
+                        group_id=session.group_id,
+                        context_id=uuid.uuid4(),
+                        data={
+                            **ctx_data,
+                            'created_at': datetime.utcnow().isoformat(),
+                            'source_session_id': str(session.id),
+                            'participants': [str(p) for p in session.participants]
+                        },
+                        created_at=datetime.utcnow()
+                    )
+                    self.db.add(context)
 
             self.db.commit()
             logger.info(f"Saved contexts for session {session.id}")

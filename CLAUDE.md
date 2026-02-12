@@ -17,11 +17,11 @@ The frontend is at `../third-wheel` (React Native/Expo). All backend changes mus
 - FastAPI with LangGraph multi-agent system
 - Supabase JWT validation for auth
 - WebSocket real-time chat with streaming
-- 9 PostgreSQL tables
+- 10 PostgreSQL tables (including therapist_notes)
 
 ## Important Notes
 
 - User IDs are Supabase UUIDs (primary keys match JWT `sub` field)
 - API responses use camelCase for frontend compatibility
-- WebSocket URL: `/ws/chat/{sessionId}/{userId}?token=JWT`
-- Contexts with secret_level > 5 are never shared in joint sessions
+- WebSocket URL: `/ws/chat/{sessionId}?token=JWT` (canonical)
+- Private user contexts with `secret_level > 0` are not shared in joint sessions

@@ -5,7 +5,7 @@ AI couples therapy platform with FastAPI, multi-agent LLM system, WebSocket chat
 ## Architecture
 
 - **Backend:** FastAPI + LangGraph (multi-agent system)
-- **Database:** PostgreSQL (9 tables: users, groups, sessions, messages, contexts, check_ins, llm_calls, notifications)
+- **Database:** PostgreSQL (10 tables including therapist_notes)
 - **Auth:** Supabase JWT validation
 - **LLM:** Anthropic Claude API (or mock LLM in demo mode)
 - **Real-time:** WebSocket chat with streaming support
@@ -14,11 +14,11 @@ AI couples therapy platform with FastAPI, multi-agent LLM system, WebSocket chat
 
 - **Private Agent:** Individual therapy for each user
 - **Joint Agent:** Couples therapy with LangGraph orchestration
-- **Privacy Levels:** Secret levels 1-10 control context sharing
+- **Privacy Levels:** Secret levels 0-10 control context sharing
 - **Inter-Agent Communication:** Private agents can query each other
 - **Notifications:** Real-time WebSocket notifications
 - **Streaming:** Token-by-token response streaming
-- **Check-ins:** Accountability tasks with verification workflow
+- **Check-ins/Tasks:** Accountability tasks with acceptance and verification workflow
 - **Demo Mode:** Full functionality without API costs
 
 ---
@@ -42,7 +42,7 @@ cp .env.example .env
 # Edit .env with your credentials
 
 # 2. Install dependencies and start
-./start.sh
+./scripts/start.sh
 
 # 3. Optionally seed demo data
 python scripts/seed_demo_data.py
@@ -51,7 +51,7 @@ python scripts/seed_demo_data.py
 **URLs:**
 - API docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/health
-- WebSocket: `ws://localhost:8000/ws/chat/{sessionId}/{userId}?token=JWT`
+- WebSocket: `ws://localhost:8000/ws/chat/{sessionId}?token=JWT`
 
 ### Demo Mode (No API Costs)
 
@@ -66,7 +66,7 @@ ANTHROPIC_API_KEY=  # Can be empty in demo mode
 python scripts/seed_demo_data.py
 
 # Start server
-./start.sh
+./scripts/start.sh
 ```
 
 Demo mode uses mock LLM responses that simulate realistic therapy conversations.
@@ -136,7 +136,7 @@ curl https://your-app.railway.app/health
 ```
 
 - **API Docs:** `https://your-app.railway.app/docs`
-- **WebSocket:** `wss://your-app.railway.app/ws/chat/{sessionId}/{userId}?token=JWT`
+- **WebSocket:** `wss://your-app.railway.app/ws/chat/{sessionId}?token=JWT`
 
 ---
 
@@ -155,14 +155,25 @@ curl https://your-app.railway.app/health
 
 ### Sessions
 - `POST /api/sessions` - Create session
+- `GET /api/sessions/my` - List current user's sessions
 - `GET /api/sessions/{id}` - Get session
-- `PUT /api/sessions/{id}/status` - Update status
+- `GET /api/sessions/{id}/messages` - Get session transcript
+- `POST /api/sessions/{id}/request-end` - Request session end
+- `POST /api/sessions/{id}/end` - End and process session
 
 ### Check-ins
-- `GET /api/checkins` - Get user's check-ins
-- `POST /api/checkins` - Create check-in
-- `PUT /api/checkins/{id}/complete` - Mark complete
+- `GET /api/checkins/{session_id}/proposed` - Proposed check-ins from a session
+- `GET /api/checkins/{group_id}/active` - Active check-ins for current user
+- `PUT /api/checkins/{id}/approve` - Approve proposed check-in
+- `PUT /api/checkins/{id}/mark-done` - Mark occurrence complete
 - `PUT /api/checkins/{id}/verify` - Verify completion
+- `GET /api/checkins/{id}` - Get check-in by ID
+
+### Tasks (POC)
+- `GET /api/tasks/{group_id}` - List tasks for a group
+- `POST /api/tasks/{task_id}/decision` - Assignee accepts/rejects proposed task
+- `POST /api/tasks/{task_id}/checkins/{checkin_id}/complete` - Mark task done
+- `POST /api/tasks/{task_id}/verify` - Verifier approves/rejects completion
 
 ### Notifications
 - `GET /api/notifications` - Get user's notifications
@@ -172,7 +183,7 @@ curl https://your-app.railway.app/health
 - `DELETE /api/notifications/{id}` - Delete notification
 
 ### WebSocket
-- `WS /ws/chat/{sessionId}/{userId}?token=JWT` - Real-time chat
+- `WS /ws/chat/{sessionId}?token=JWT` - Real-time chat
 
 Full API docs available at `/docs` (Swagger UI)
 
@@ -182,7 +193,7 @@ Full API docs available at `/docs` (Swagger UI)
 
 ### Connection
 ```
-wss://your-app.railway.app/ws/chat/{sessionId}/{userId}?token=JWT
+wss://your-app.railway.app/ws/chat/{sessionId}?token=JWT
 ```
 
 ### Client → Server Messages
@@ -217,13 +228,14 @@ wss://your-app.railway.app/ws/chat/{sessionId}/{userId}?token=JWT
 
 ## Database Schema
 
-9 tables total:
+10 tables total:
 - `users` - User accounts (Supabase UUID as primary key)
 - `groups` - Relationship pairs (partner1_id, partner2_id)
 - `sessions` - Therapy sessions (private/joint, with invite_message)
 - `messages` - Chat messages (with privacy_level)
-- `private_user_context` - User-specific context (with secret levels 1-10)
-- `group_context` - Shared relationship context
+- `therapist_notes` - Internal therapist memory (never exposed to clients)
+- `private_user_context` - User-specific context (with secret levels 0-10)
+- `group_context` - Shared relationship context (written during joint sessions)
 - `check_ins` - Accountability tasks (with completion_history)
 - `llm_calls` - LLM usage logging
 - `notifications` - User notifications
@@ -245,6 +257,7 @@ All configuration via environment variables:
 | `LLM_MODEL` | No | claude-3-haiku | Model to use |
 | `ENVIRONMENT` | No | development | development/production |
 | `SECRET_LEVEL_THRESHOLD` | No | 5 | Context sharing threshold |
+| `COUPLES_MAX_SECRET_LEVEL` | No | 0 | Max private-context secrecy allowed in couples sessions |
 | `PORT` | No | 8000 | Server port (Railway sets automatically) |
 
 See `.env.example` for full list.
@@ -257,8 +270,8 @@ See `.env.example` for full list.
 # Seed demo data
 python scripts/seed_demo_data.py
 
-# Start with auto-reload
-./start.sh
+# Start with production-equivalent settings
+./scripts/start.sh
 
 # Manual start
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

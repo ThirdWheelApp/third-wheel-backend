@@ -141,6 +141,7 @@ class Session(Base):
     group = relationship("Group", back_populates="sessions")
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_sessions")
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+    therapist_notes = relationship("TherapistNote", back_populates="session", cascade="all, delete-orphan")
     check_ins = relationship("CheckIn", back_populates="source_session")
 
     # Indexes
@@ -186,6 +187,36 @@ class Message(Base):
     # Indexes
     __table_args__ = (
         Index('idx_messages_session_seq', 'session_id', 'sequence_number'),
+    )
+
+
+class TherapistNote(Base):
+    """
+    Internal therapist notes.
+
+    These notes are never exposed to clients. They provide continuity
+    for orchestrator logic across turns and session end processing.
+    """
+    __tablename__ = "therapist_notes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    turn_sequence = Column(Integer, nullable=False)
+    note_type = Column(String(50), nullable=False, default="turn")  # 'turn' or 'summary'
+    scope = Column(String(50), nullable=False)  # 'private' or 'joint'
+    subject_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL", onupdate="CASCADE"),
+        nullable=True,
+    )
+    content = Column(JSONB, nullable=False, default={})
+    privacy_tags = Column(JSONB, nullable=True, default=[])
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    session = relationship("Session", back_populates="therapist_notes")
+
+    __table_args__ = (
+        Index('idx_therapist_notes_session_turn', 'session_id', 'turn_sequence'),
     )
 
 
@@ -264,6 +295,7 @@ class CheckIn(Base):
 
     Status flow:
     - proposed: Extracted from session, awaiting approval
+    - rejected: Declined by assignee
     - active: Approved and currently being tracked
     - awaiting_verification: User marked done, waiting for verifier
     - needs_work: Verifier requested changes

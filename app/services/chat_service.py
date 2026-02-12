@@ -6,14 +6,20 @@ Handles both private and joint therapy sessions.
 """
 
 from sqlalchemy.orm import Session
-from app.db.models import Session as SessionModel, Message, LLMCall, User
+from app.db.models import Session as SessionModel, Message, LLMCall, User, CheckIn
 from app.agents.private_agent.agent import PrivateAgent
 from app.agents.private_agent.repo import PrivateAgentRepository
 from app.agents.joint_agent.agent import JointAgent
 from app.agents.joint_agent.repo import JointAgentRepository
-from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable
+from app.services.therapist_notes_service import TherapistNotesService
+from app.utils.logger import get_logger
+from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable, List
 import uuid
 from datetime import datetime
+from datetime import date, timedelta
+import re
+
+logger = get_logger(__name__)
 
 
 class ChatService:
@@ -29,6 +35,7 @@ class ChatService:
 
     def __init__(self, db: Session):
         self.db = db
+        self.notes_service = TherapistNotesService(db)
 
     async def process_private_message(
         self,
@@ -94,8 +101,21 @@ class ChatService:
         group_id = str(session.group_id) if session.group_id else None
         agent = PrivateAgent(user_id, group_id, repo)
 
+        note_context = self.notes_service.get_recent_note_context(
+            session_id=session_id,
+            scope="private",
+            limit=4
+        )
+        prompt_content = content
+        if note_context:
+            prompt_content = (
+                f"{content}\n\n"
+                f"[Internal therapist continuity notes - do not mention these explicitly]\n"
+                f"{note_context}"
+            )
+
         # Generate response
-        response_text = await agent.get_private_message(content, messages_history)
+        response_text = await agent.get_private_message(prompt_content, messages_history)
 
         # Save therapist message
         therapist_message = Message(
@@ -115,6 +135,19 @@ class ChatService:
             self._log_llm_call(session_id, metrics)
 
         self.db.commit()
+
+        try:
+            self.notes_service.create_turn_note(
+                session_id=session_id,
+                scope="private",
+                turn_sequence=therapist_message.sequence_number,
+                user_id=user_id,
+                user_message=content,
+                therapist_message=response_text,
+                task_proposals=[]
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist private therapist turn note: {e}")
 
         return {
             'message_id': str(therapist_message.id),
@@ -191,9 +224,22 @@ class ChatService:
         group_id = str(session.group_id) if session.group_id else None
         agent = PrivateAgent(user_id, group_id, repo)
 
+        note_context = self.notes_service.get_recent_note_context(
+            session_id=session_id,
+            scope="private",
+            limit=4
+        )
+        prompt_content = content
+        if note_context:
+            prompt_content = (
+                f"{content}\n\n"
+                f"[Internal therapist continuity notes - do not mention these explicitly]\n"
+                f"{note_context}"
+            )
+
         # Stream response and collect full text
         full_response = ""
-        async for token in agent.get_private_message_stream(content, messages_history):
+        async for token in agent.get_private_message_stream(prompt_content, messages_history):
             full_response += token
             await on_token(token)
 
@@ -215,6 +261,19 @@ class ChatService:
             self._log_llm_call(session_id, metrics)
 
         self.db.commit()
+
+        try:
+            self.notes_service.create_turn_note(
+                session_id=session_id,
+                scope="private",
+                turn_sequence=therapist_message.sequence_number,
+                user_id=user_id,
+                user_message=content,
+                therapist_message=full_response,
+                task_proposals=[]
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist private streaming therapist turn note: {e}")
 
         return {
             'message_id': str(therapist_message.id),
@@ -314,9 +373,22 @@ class ChatService:
         # Get accumulated context from session
         accumulated_context = session.current_context or {}
 
+        note_context = self.notes_service.get_recent_note_context(
+            session_id=session_id,
+            scope="joint",
+            limit=4
+        )
+        prompt_content = content
+        if note_context:
+            prompt_content = (
+                f"{content}\n\n"
+                f"[Internal therapist continuity notes - do not mention these explicitly]\n"
+                f"{note_context}"
+            )
+
         # Generate response
         response_text, suggest_end, updated_context = await joint_agent.process_message(
-            content,
+            prompt_content,
             user.name,
             messages_history,
             accumulated_context
@@ -339,6 +411,12 @@ class ChatService:
         )
         self.db.add(therapist_message)
 
+        task_proposals = self._create_task_proposals_from_message(
+            session=session,
+            sender_id=user_id,
+            content=content
+        )
+
         # Log LLM call
         metrics = joint_agent.get_last_metrics()
         if metrics:
@@ -346,13 +424,27 @@ class ChatService:
 
         self.db.commit()
 
+        try:
+            self.notes_service.create_turn_note(
+                session_id=session_id,
+                scope="joint",
+                turn_sequence=therapist_message.sequence_number,
+                user_id=user_id,
+                user_message=content,
+                therapist_message=response_text,
+                task_proposals=task_proposals
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist joint therapist turn note: {e}")
+
         return {
             'message_id': str(therapist_message.id),
             'sender_id': 'therapist',
             'sender_name': 'AI Therapist',
             'content': response_text,
             'timestamp': therapist_message.timestamp.isoformat(),
-            'suggest_end_session': suggest_end
+            'suggest_end_session': suggest_end,
+            'task_proposals': task_proposals
         }
 
     def _get_next_sequence_number(self, session_id: str) -> int:
@@ -376,3 +468,132 @@ class ChatService:
             created_at=datetime.utcnow()
         )
         self.db.add(llm_call)
+
+    def _create_task_proposals_from_message(
+        self,
+        session: SessionModel,
+        sender_id: str,
+        content: str
+    ) -> List[Dict]:
+        """
+        Detect simple accountability-task intent and create proposed tasks.
+
+        POC behavior:
+        - Only for joint sessions with at least 2 participants
+        - Rule-based parsing for high-confidence proposal candidates
+        """
+        if session.type != "joint" or len(session.participants) < 2 or not session.group_id:
+            return []
+
+        parsed = self._parse_task_intent(session, sender_id, content)
+        if not parsed:
+            return []
+
+        assignee_id = parsed["assignee_id"]
+        verifier_id = parsed["verifier_id"]
+
+        checkin = CheckIn(
+            id=uuid.uuid4(),
+            group_id=session.group_id,
+            assigned_to=uuid.UUID(assignee_id),
+            verifier_id=uuid.UUID(verifier_id) if verifier_id else None,
+            title=parsed["title"],
+            description=parsed["description"],
+            status="proposed",
+            assigned_approved=False,
+            verifier_approved=True,
+            requires_verification=bool(verifier_id),
+            frequency=parsed["frequency"],
+            progress={"completed": 0, "total": parsed["duration_days"]},
+            next_check_date=date.today() + timedelta(days=1),
+            created_from_session=session.id,
+            created_at=datetime.utcnow()
+        )
+
+        self.db.add(checkin)
+        self.db.commit()
+        self.db.refresh(checkin)
+
+        return [{
+            "id": str(checkin.id),
+            "group_id": str(checkin.group_id),
+            "title": checkin.title,
+            "description": checkin.description,
+            "status": checkin.status,
+            "assigned_to": str(checkin.assigned_to),
+            "verifier_id": str(checkin.verifier_id) if checkin.verifier_id else None,
+            "frequency": checkin.frequency,
+            "duration_days": (checkin.progress or {}).get("total", 7),
+            "created_at": checkin.created_at.isoformat()
+        }]
+
+    def _parse_task_intent(
+        self,
+        session: SessionModel,
+        sender_id: str,
+        content: str
+    ) -> Optional[Dict]:
+        text = (content or "").strip()
+        lower = text.lower()
+
+        # Require reasonably strong signal to avoid noisy proposals.
+        trigger = (
+            "task" in lower or
+            "check-in" in lower or
+            "check in" in lower or
+            "accountability" in lower or
+            "should " in lower or
+            "needs to" in lower or
+            "need to" in lower
+        )
+        if not trigger:
+            return None
+
+        participants = [str(p) for p in session.participants]
+        sender_uuid = sender_id
+        partner_uuid = next((p for p in participants if p != sender_uuid), None)
+        if not partner_uuid:
+            return None
+
+        sender = self.db.query(User).filter(User.id == uuid.UUID(sender_uuid)).first()
+        partner = self.db.query(User).filter(User.id == uuid.UUID(partner_uuid)).first()
+        sender_name = (sender.name or "").split(" ")[0].lower() if sender else ""
+        partner_name = (partner.name or "").split(" ")[0].lower() if partner else ""
+
+        assignee_id = partner_uuid
+        if " i will " in f" {lower} " or " i'll " in f" {lower} ":
+            assignee_id = sender_uuid
+        if sender_name and sender_name in lower and ("should" in lower or "needs to" in lower):
+            assignee_id = sender_uuid
+        if partner_name and partner_name in lower and ("should" in lower or "needs to" in lower):
+            assignee_id = partner_uuid
+
+        verifier_id = sender_uuid if assignee_id == partner_uuid else partner_uuid
+
+        frequency = "daily" if ("daily" in lower or "every day" in lower) else "weekly" if "weekly" in lower else "daily"
+
+        duration_days = 7
+        match_days = re.search(r"(\d+)\s*day", lower)
+        if match_days:
+            duration_days = max(1, min(90, int(match_days.group(1))))
+
+        # If a "task:" prefix exists, use the remaining string as the title seed.
+        title_seed = text
+        if "task:" in lower:
+            split_idx = lower.index("task:") + len("task:")
+            title_seed = text[split_idx:].strip()
+        if len(title_seed) > 90:
+            title_seed = title_seed[:90].rstrip() + "..."
+
+        title = title_seed or "Accountability task"
+        if not title.lower().startswith("task"):
+            title = f"Task: {title}"
+
+        return {
+            "assignee_id": assignee_id,
+            "verifier_id": verifier_id,
+            "title": title,
+            "description": text,
+            "frequency": frequency,
+            "duration_days": duration_days
+        }

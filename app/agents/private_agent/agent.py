@@ -228,15 +228,16 @@ Provide a warm, empathetic response as their therapist:"""
         contexts = self.repo.get_all_context(self.user_id, self.group_id)
 
         # Filter to only shareable contexts
+        share_threshold = settings.COUPLES_MAX_SECRET_LEVEL
         filtered = self.repo.filter_by_secret_level(
             contexts,
-            settings.SECRET_LEVEL_THRESHOLD
+            share_threshold
         )
 
         context_text = format_context_for_llm(filtered)
 
         # Build prompt with privacy instructions
-        prompt = f"""Available context (privacy-filtered, secret_level <= {settings.SECRET_LEVEL_THRESHOLD}):
+        prompt = f"""Available context (privacy-filtered, secret_level <= {share_threshold}):
 {context_text}
 
 Query from joint therapy session: {query}
@@ -310,7 +311,7 @@ Response:"""
         contexts = self.repo.get_all_context(self.user_id, self.group_id)
 
         # Use stricter filtering for agent-to-agent (threshold - 1)
-        partner_agent_threshold = settings.SECRET_LEVEL_THRESHOLD - 1
+        partner_agent_threshold = settings.COUPLES_MAX_SECRET_LEVEL
         filtered = self.repo.filter_by_secret_level(
             contexts,
             partner_agent_threshold

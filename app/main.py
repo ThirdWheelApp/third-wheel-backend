@@ -24,7 +24,7 @@ import time
 
 from app.config.settings import settings
 from app.db.database import engine, Base
-from app.api.routes import users, sessions, checkins, websocket, groups, notifications
+from app.api.routes import users, sessions, checkins, websocket, groups, notifications, tasks
 from app.utils.logger import get_logger
 from app.utils.serializers import convert_keys_to_camel
 
@@ -334,6 +334,12 @@ app.include_router(
     checkins.router,
     prefix="/api/checkins",
     tags=["checkins"]
+)
+
+app.include_router(
+    tasks.router,
+    prefix="/api/tasks",
+    tags=["tasks"]
 )
 
 app.include_router(

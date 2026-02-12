@@ -16,6 +16,8 @@ from app.utils.serializers import convert_keys_to_camel
 from app.utils.logger import get_logger
 from typing import Optional
 import json
+import uuid
+from datetime import datetime
 
 logger = get_logger(__name__)
 
@@ -117,6 +119,9 @@ class ChatHandler:
         elif message_type == 'typing_stop':
             await manager.broadcast_typing(session_id, user_id, False)
 
+        elif message_type == 'typing':
+            await manager.broadcast_typing(session_id, user_id, bool(data.get('isTyping', False)))
+
     async def _process_user_message(
         self,
         data: dict,
@@ -143,6 +148,22 @@ class ChatHandler:
             return
 
         try:
+            from app.db.models import User
+            user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+            await manager.broadcast(
+                session_id,
+                {
+                    'type': 'message',
+                    'messageId': f'client-{uuid.uuid4()}',
+                    'senderId': user_id,
+                    'senderName': user.name if user else 'User',
+                    'content': content,
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'sequenceNumber': None,
+                },
+                exclude_websocket=websocket
+            )
+
             # Broadcast that AI is typing (using camelCase for frontend)
             await manager.broadcast(
                 session_id,
@@ -155,7 +176,6 @@ class ChatHandler:
 
             # Get session to determine type
             from app.db.models import Session as SessionModel
-            import uuid
 
             session = self.db.query(SessionModel).filter(
                 SessionModel.id == uuid.UUID(session_id)
@@ -190,6 +210,14 @@ class ChatHandler:
                     content
                 )
                 await self._broadcast_response(session_id, response)
+                for task in response.get('task_proposals', []):
+                    await manager.broadcast(
+                        session_id,
+                        {
+                            'type': 'taskProposal',
+                            'task': convert_keys_to_camel(task)
+                        }
+                    )
 
             # Stop typing indicator
             await manager.broadcast(
@@ -291,7 +319,9 @@ class ChatHandler:
 
     async def _broadcast_response(self, session_id: str, response: dict):
         """Broadcast a non-streaming response."""
-        camel_response = convert_keys_to_camel(response)
+        response_copy = dict(response)
+        response_copy.pop('task_proposals', None)
+        camel_response = convert_keys_to_camel(response_copy)
         await manager.broadcast(
             session_id,
             {
