@@ -59,6 +59,9 @@ class InvitePartnerRequest(BaseModel):
     # Optional: User ID for unauthenticated calls during onboarding
     # When provided without auth, this is used as the inviter ID
     inviter_user_id: Optional[str] = Field(None, alias="inviterUserId")
+    # Optional explicit redirect URL for invite email links.
+    # Useful when the request has no Origin header (e.g., native clients).
+    redirect_to: Optional[str] = Field(None, alias="redirectTo")
 
     model_config = ConfigDict(populate_by_name=True)
 

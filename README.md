@@ -146,7 +146,7 @@ curl https://your-app.railway.app/health
 - `POST /api/users/initialize` - Initialize after signup (no auth required)
 - `GET /api/users/me` - Get current user profile
 - `GET /api/users/{id}` - Get user by ID
-- `POST /api/users/invite-partner` - Send partner invitation email
+- `POST /api/users/invite-partner` - Send partner invitation email (`redirectTo` optional)
 
 ### Groups
 - `GET /api/groups/my-groups` - Get user's groups
@@ -265,6 +265,19 @@ All configuration via environment variables:
 | `PORT` | No | 8000 | Server port (Railway sets automatically) |
 
 See `.env.example` for full list.
+
+### Supabase Invite Redirect Setup
+
+For partner invite links to open the correct app URL, configure Supabase Auth URL settings:
+
+1. Set **Auth → URL Configuration → Site URL** to your real frontend URL (not `localhost:3000`).
+2. Add **Additional Redirect URLs** for every invite target you use:
+   - `https://your-frontend-domain.com`
+   - `http://localhost:8081`
+   - `http://localhost:8082`
+   - `thirdwheel://signup`
+
+If a requested `redirect_to` is not allowlisted, Supabase falls back to Site URL.
 
 ---
 

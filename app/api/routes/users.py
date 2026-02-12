@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional
+import httpx
 from app.db.database import get_db
 from app.db.models import User
 from app.schemas.schemas import UserCreate, UserResponse, InvitePartnerRequest, InvitePartnerResponse
@@ -18,6 +19,14 @@ import uuid
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _is_allowed_invite_redirect(url: Optional[str]) -> bool:
+    """Allow http(s) web URLs and the native thirdwheel deep link scheme."""
+    if not url:
+        return False
+    normalized = url.strip().lower()
+    return normalized.startswith("http://") or normalized.startswith("https://") or normalized.startswith("thirdwheel://")
 
 
 @router.post("/initialize", response_model=UserResponse)
@@ -193,14 +202,21 @@ async def invite_partner(
 
     try:
         # Redirect priority:
-        # 1) Explicit configured URL (recommended for production)
-        # 2) Request origin (useful for local web testing)
-        # 3) Native deep link fallback
+        # 1) Client-provided redirectTo (e.g., web origin from frontend)
+        # 2) Explicit configured URL (recommended for production)
+        # 3) Request origin (useful for local web testing)
+        # 4) Native deep link fallback
         request_origin = request.headers.get("origin")
-        redirect_to = settings.INVITE_REDIRECT_URL
-        if not redirect_to and request_origin and request_origin.startswith(("http://", "https://")):
+        redirect_to = (
+            invite_data.redirect_to
+            if _is_allowed_invite_redirect(invite_data.redirect_to)
+            else None
+        )
+        if not redirect_to and _is_allowed_invite_redirect(settings.INVITE_REDIRECT_URL):
+            redirect_to = settings.INVITE_REDIRECT_URL
+        if not redirect_to and _is_allowed_invite_redirect(request_origin):
             redirect_to = request_origin
-        if not redirect_to:
+        if not _is_allowed_invite_redirect(redirect_to):
             redirect_to = "thirdwheel://signup"
 
         # Send invitation using direct HTTP call to Supabase Admin API
@@ -220,6 +236,35 @@ async def invite_partner(
             success=True,
             message=f"Invitation sent to {invite_data.partner_email}"
         )
+
+    except httpx.HTTPStatusError as e:
+        # Surface actionable errors from Supabase instead of collapsing into HTTP 500.
+        upstream_status = e.response.status_code if e.response else status.HTTP_502_BAD_GATEWAY
+        upstream_body = e.response.text if e.response else str(e)
+        normalized_body = upstream_body.lower()
+
+        if upstream_status == status.HTTP_429_TOO_MANY_REQUESTS:
+            detail = "Invite rate limit reached. Please wait a few minutes and try again."
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
+
+        if upstream_status == status.HTTP_422_UNPROCESSABLE_ENTITY:
+            if "already" in normalized_body and ("registered" in normalized_body or "invited" in normalized_body):
+                detail = "This partner has already been invited or already has an account."
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+            detail = (
+                "Invite configuration is invalid. Check Supabase Auth URL configuration "
+                "(Site URL and redirect allowlist)."
+            )
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Invite provider error ({upstream_status}). Please try again."
+        )
+
+    except HTTPException:
+        raise
 
     except Exception as e:
         logger.error(f"Failed to send partner invitation: {e}", exc_info=True)
