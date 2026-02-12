@@ -108,6 +108,8 @@ class Settings(BaseSettings):
 
     # Comma-separated list of allowed CORS origins for production
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8081"
+    # Keep localhost web clients usable against Railway for POC testing.
+    ALLOW_LOCALHOST_ORIGINS: bool = True
 
     # ==========================================
     # LOGGING CONFIGURATION

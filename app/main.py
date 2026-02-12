@@ -229,6 +229,7 @@ if settings.ENVIRONMENT == "development":
     # Development: Allow local origins
     allowed_origins = [
         "http://localhost:8081",  # Expo dev server
+        "http://localhost:8082",  # Expo dev server (alternate port)
         "http://localhost:19006",  # Expo web
         "http://localhost:3000",   # React dev server
         "exp://localhost:8081",   # Expo Go
@@ -236,7 +237,19 @@ if settings.ENVIRONMENT == "development":
     logger.info(f"CORS enabled for development origins: {allowed_origins}")
 else:
     # Production: Use configured origins
-    allowed_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",")]
+    configured_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
+    localhost_origins = [
+        "http://localhost:8081",
+        "http://localhost:8082",
+        "http://localhost:19006",
+        "http://localhost:3000",
+    ]
+
+    if settings.ALLOW_LOCALHOST_ORIGINS:
+        allowed_origins = list(dict.fromkeys(configured_origins + localhost_origins))
+    else:
+        allowed_origins = configured_origins
+
     logger.info(f"CORS enabled for production origins: {allowed_origins}")
 
 app.add_middleware(

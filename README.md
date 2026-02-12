@@ -258,6 +258,7 @@ All configuration via environment variables:
 | `ENVIRONMENT` | No | development | development/production |
 | `SECRET_LEVEL_THRESHOLD` | No | 5 | Context sharing threshold |
 | `COUPLES_MAX_SECRET_LEVEL` | No | 0 | Max private-context secrecy allowed in couples sessions |
+| `ALLOW_LOCALHOST_ORIGINS` | No | true | Permit localhost web clients against Railway API (POC) |
 | `PORT` | No | 8000 | Server port (Railway sets automatically) |
 
 See `.env.example` for full list.
