@@ -252,9 +252,18 @@ else:
 
     logger.info(f"CORS enabled for production origins: {allowed_origins}")
 
+# With allow_credentials=True, wildcard '*' should be expressed via regex
+# so browsers receive the requesting Origin value (not '*').
+allow_origin_regex = None
+if "*" in allowed_origins:
+    allowed_origins = [origin for origin in allowed_origins if origin != "*"]
+    allow_origin_regex = r"https?://.*"
+    logger.warning("CORS wildcard detected; using allow_origin_regex for credentialed requests")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
