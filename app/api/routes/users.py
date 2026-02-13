@@ -192,10 +192,12 @@ async def invite_partner(
             detail="User ID is required. Provide authentication or inviterUserId in body."
         )
 
-    # Get inviter user for name (if they exist in our DB)
+    # Get inviter user details if they exist in our DB
+    inviter_email = None
     try:
         inviter = db.query(User).filter(User.id == uuid.UUID(inviter_id)).first()
         inviter_name = inviter.name if inviter else invite_data.inviter_name
+        inviter_email = inviter.email if inviter else None
     except Exception:
         # If user not in our DB yet (during onboarding), use provided name
         inviter_name = invite_data.inviter_name
@@ -226,7 +228,9 @@ async def invite_partner(
             redirect_to=redirect_to,
             data={
                 "invited_by": inviter_id,
-                "inviter_name": inviter_name
+                "inviter_name": inviter_name,
+                "inviter_email": inviter_email,
+                "needs_onboarding": True,
             }
         )
 
