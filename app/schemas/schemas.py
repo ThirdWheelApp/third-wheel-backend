@@ -56,6 +56,7 @@ class InvitePartnerRequest(BaseModel):
     """Schema for inviting a partner via email."""
     partner_email: EmailStr = Field(..., alias="partnerEmail")
     inviter_name: str = Field(..., alias="inviterName")
+    inviter_email: Optional[EmailStr] = Field(None, alias="inviterEmail")
     # Optional: User ID for unauthenticated calls during onboarding
     # When provided without auth, this is used as the inviter ID
     inviter_user_id: Optional[str] = Field(None, alias="inviterUserId")

@@ -193,11 +193,11 @@ async def invite_partner(
         )
 
     # Get inviter user details if they exist in our DB
-    inviter_email = None
+    inviter_email = invite_data.inviter_email
     try:
         inviter = db.query(User).filter(User.id == uuid.UUID(inviter_id)).first()
         inviter_name = inviter.name if inviter else invite_data.inviter_name
-        inviter_email = inviter.email if inviter else None
+        inviter_email = inviter.email if inviter else inviter_email
     except Exception:
         # If user not in our DB yet (during onboarding), use provided name
         inviter_name = invite_data.inviter_name
