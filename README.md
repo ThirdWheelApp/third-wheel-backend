@@ -275,7 +275,10 @@ For partner invite links to open the correct app URL, configure Supabase Auth UR
    - `https://your-frontend-domain.com`
    - `http://localhost:8081`
    - `http://localhost:8082`
+   - `http://localhost:8081/onboarding`
+   - `http://localhost:8082/onboarding`
    - `thirdwheel://signup`
+   - `thirdwheel://onboarding`
 
 If a requested `redirect_to` is not allowlisted, Supabase falls back to Site URL.
 
