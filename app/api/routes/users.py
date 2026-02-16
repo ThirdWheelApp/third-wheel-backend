@@ -15,6 +15,7 @@ from app.utils.supabase_admin import invite_user_by_email, is_admin_configured
 from app.utils.logger import get_logger
 from app.config.settings import settings
 import uuid
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,44 @@ def _is_allowed_invite_redirect(url: Optional[str]) -> bool:
         return False
     normalized = url.strip().lower()
     return normalized.startswith("http://") or normalized.startswith("https://") or normalized.startswith("thirdwheel://")
+
+
+def _build_canonical_invite_redirect(
+    base_redirect: str,
+    invited_email: str,
+    inviter_email: Optional[str],
+    inviter_name: str,
+    inviter_id: str,
+) -> str:
+    """
+    Normalize invite redirects so invitees always land in onboarding with prefilled context.
+
+    This avoids ambiguous root redirects (e.g. http://localhost:8081) that can drop users on login.
+    """
+    invite_params = {
+        "mode": "invite",
+        "email": invited_email.lower(),
+        "inviterName": inviter_name,
+        "invitedBy": inviter_id,
+    }
+    if inviter_email:
+        invite_params["partnerEmail"] = inviter_email.lower()
+
+    parsed = urlparse(base_redirect)
+
+    if parsed.scheme == "thirdwheel":
+        return f"thirdwheel://onboarding?{urlencode(invite_params)}"
+
+    existing_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    existing_query.update(invite_params)
+    return urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        "/onboarding",
+        "",
+        urlencode(existing_query),
+        "",
+    ))
 
 
 @router.post("/initialize", response_model=UserResponse)
@@ -220,6 +259,13 @@ async def invite_partner(
             redirect_to = request_origin
         if not _is_allowed_invite_redirect(redirect_to):
             redirect_to = "thirdwheel://signup"
+        redirect_to = _build_canonical_invite_redirect(
+            base_redirect=redirect_to,
+            invited_email=str(invite_data.partner_email),
+            inviter_email=inviter_email,
+            inviter_name=inviter_name,
+            inviter_id=inviter_id,
+        )
 
         # Send invitation using direct HTTP call to Supabase Admin API
         # This avoids dependency issues with the supabase-py client
