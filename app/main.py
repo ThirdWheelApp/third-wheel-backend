@@ -19,6 +19,8 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import asyncio
 import json
 import time
 
@@ -29,6 +31,13 @@ from app.utils.logger import get_logger
 from app.utils.serializers import convert_keys_to_camel
 
 logger = get_logger(__name__)
+
+schema_startup_status = {
+    "status": "not_started",
+    "started_at": None,
+    "completed_at": None,
+    "error": None,
+}
 
 
 class WebSocketLoggingMiddleware:
@@ -189,6 +198,47 @@ def run_schema_migrations():
             conn.rollback()
 
 
+def initialize_database_schema():
+    """
+    Initialize database tables and run idempotent schema migrations.
+
+    This intentionally runs outside the FastAPI lifespan critical path so
+    Railway can complete health checks even if the database is slow to accept
+    connections during deploy.
+    """
+    schema_startup_status.update({
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "error": None,
+    })
+
+    try:
+        # Ensure all model classes are registered on Base.metadata.
+        from app.db import models  # noqa: F401
+
+        logger.info("Creating database tables...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created successfully")
+
+        logger.info("Running schema migrations...")
+        run_schema_migrations()
+        logger.info("Schema migrations complete")
+
+        schema_startup_status.update({
+            "status": "ready",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "error": None,
+        })
+    except Exception as exc:
+        logger.exception("Database schema initialization failed")
+        schema_startup_status.update({
+            "status": "failed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc),
+        })
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -196,24 +246,30 @@ async def lifespan(app: FastAPI):
 
     Runs on startup and shutdown.
     """
-    # Startup: Create database tables
     logger.info("Starting Third Wheel Backend...")
-    logger.info("Creating database tables...")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables created successfully")
-
-    # Run schema migrations for existing tables
-    logger.info("Running schema migrations...")
-    run_schema_migrations()
-    logger.info("Schema migrations complete")
-
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"LLM Model: {settings.LLM_MODEL}")
 
-    yield
+    schema_task = asyncio.create_task(asyncio.to_thread(initialize_database_schema))
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(schema_task),
+            timeout=settings.STARTUP_DB_INIT_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Database schema initialization is still running after "
+            f"{settings.STARTUP_DB_INIT_WAIT_SECONDS}s; continuing startup"
+        )
 
-    # Shutdown: Cleanup
-    logger.info("Shutting down Third Wheel Backend...")
+    try:
+        yield
+    finally:
+        if not schema_task.done():
+            logger.warning("Database schema initialization still running during shutdown")
+
+        # Shutdown: Cleanup
+        logger.info("Shutting down Third Wheel Backend...")
 
 
 # Initialize FastAPI app
@@ -392,13 +448,22 @@ async def health_check():
     """
     Detailed health check endpoint.
 
-    Can be extended to check database connectivity,
-    external services, etc.
+    Returns 200 for Railway while surfacing database schema initialization
+    status in the response body.
     """
+    schema_status = schema_startup_status["status"]
+    database_status = {
+        "not_started": "pending",
+        "running": "initializing",
+        "ready": "connected",
+        "failed": "unavailable",
+    }.get(schema_status, "unknown")
+
     return {
         "status": "healthy",
-        "database": "connected",
-        "llm_service": "configured"
+        "database": database_status,
+        "schema_init": schema_startup_status,
+        "llm_service": "configured" if settings.DEMO_MODE or settings.ANTHROPIC_API_KEY else "missing_api_key",
     }
 
 

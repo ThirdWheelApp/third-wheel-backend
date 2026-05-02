@@ -115,6 +115,8 @@ In Railway Dashboard → Your Service → **Variables**, add:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Auto | Railway provides this automatically |
+| `DB_CONNECT_TIMEOUT_SECONDS` | No | Default: `10`; fail fast on bad DB connections |
+| `STARTUP_DB_INIT_WAIT_SECONDS` | No | Default: `15`; max startup wait before serving health checks |
 | `SUPABASE_URL` | Yes | Your Supabase project URL (e.g., `https://abc.supabase.co`) |
 | `SUPABASE_ANON_KEY` | Yes | Supabase public/anon key |
 | `SUPABASE_JWT_SECRET` | Yes | From Supabase → Settings → API → JWT Settings |
@@ -132,7 +134,7 @@ In Railway Dashboard → Your Service → **Variables**, add:
 curl https://your-app.railway.app/health
 
 # Expected response:
-# {"status": "healthy", "database": "connected", "llm_service": "configured"}
+# {"status": "healthy", "database": "connected", "schemaInit": {"status": "ready"}, "llmService": "configured"}
 ```
 
 - **API Docs:** `https://your-app.railway.app/docs`

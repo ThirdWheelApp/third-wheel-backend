@@ -11,8 +11,16 @@ It provides:
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from typing import Generator
+from typing import Any, Generator
 from app.config.settings import settings
+
+
+def _engine_connect_args() -> dict[str, Any]:
+    """Return driver-specific connection options."""
+    if settings.DATABASE_URL.startswith(("postgresql://", "postgresql+psycopg2://")):
+        return {"connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS}
+    return {}
+
 
 # Create SQLAlchemy engine
 # echo=True in development for SQL logging
@@ -21,7 +29,8 @@ engine = create_engine(
     echo=(settings.ENVIRONMENT == "development"),
     pool_pre_ping=True,  # Verify connections before using
     pool_size=5,         # Connection pool size
-    max_overflow=10      # Max connections beyond pool_size
+    max_overflow=10,     # Max connections beyond pool_size
+    connect_args=_engine_connect_args()
 )
 
 # Session factory

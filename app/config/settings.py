@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # DATABASE CONFIGURATION
     # ==========================================
     DATABASE_URL: str
+    DB_CONNECT_TIMEOUT_SECONDS: int = 10
+    STARTUP_DB_INIT_WAIT_SECONDS: int = 15
 
     # ==========================================
     # SUPABASE CONFIGURATION
