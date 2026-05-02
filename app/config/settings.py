@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # - Local web: http://localhost:8082
     # - Native deep link: thirdwheel://signup
     INVITE_REDIRECT_URL: Optional[str] = None
+    # Disable locally/tests to exercise invite acceptance without sending email.
+    INVITE_EMAIL_DELIVERY_ENABLED: bool = True
 
     # ==========================================
     # DEMO MODE CONFIGURATION

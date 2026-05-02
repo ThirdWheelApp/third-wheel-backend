@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models import Group, User
-from app.schemas.schemas import GroupCreate, GroupResponse
+from app.schemas.schemas import GroupAcceptInviteRequest, GroupCreate, GroupResponse
+from app.services.invitation_service import accept_pending_relationship_invite, normalize_email
 from app.utils.auth import get_current_user
 from app.utils.logger import get_logger
 from typing import List
@@ -85,6 +86,7 @@ async def create_group(
         id=uuid.uuid4(),
         partner1_id=current_user_uuid,
         partner2_id=partner_uuid,
+        partner2_email=normalize_email(partner.email),
         status="active"
     )
 
@@ -129,6 +131,38 @@ async def get_my_groups(
 
     logger.info(f"Found {len(groups)} groups for user {current_user_id}")
     return groups
+
+
+@router.post("/accept-invite", response_model=GroupResponse)
+async def accept_invite(
+    accept_data: GroupAcceptInviteRequest,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Accept a pending relationship invite for the authenticated user.
+
+    The authenticated user's email must match the invited email on the pending
+    relationship. The client may provide invitedBy and/or groupId from the
+    invite link to disambiguate multiple pending invites.
+    """
+    user = db.query(User).filter(User.id == uuid.UUID(current_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Current user not found")
+
+    try:
+        group = accept_pending_relationship_invite(
+            db,
+            invited_user=user,
+            invited_by=accept_data.invited_by,
+            group_id=accept_data.group_id,
+        )
+        db.commit()
+        db.refresh(group)
+        return group
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
 @router.get("/user/{user_id}", response_model=List[GroupResponse])

@@ -257,6 +257,7 @@ All configuration via environment variables:
 | `SUPABASE_JWT_SECRET` | Yes | - | Supabase JWT secret |
 | `SUPABASE_SERVICE_ROLE_KEY` | For invites | - | Required for `invite-partner` endpoint |
 | `INVITE_REDIRECT_URL` | No | request origin or deep link | Redirect URL used in invite emails |
+| `INVITE_EMAIL_DELIVERY_ENABLED` | No | `true` | Set `false` for local invite-flow testing without sending email |
 | `DEMO_MODE` | No | false | Use mock LLM responses |
 | `ANTHROPIC_API_KEY` | If !demo | - | Anthropic API key |
 | `LLM_MODEL` | No | claude-haiku-4-5 | Model to use |

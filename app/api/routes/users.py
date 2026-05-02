@@ -14,6 +14,7 @@ from app.utils.auth import get_current_user, get_current_user_optional
 from app.utils.supabase_admin import invite_user_by_email, is_admin_configured
 from app.utils.logger import get_logger
 from app.config.settings import settings
+from app.services.invitation_service import create_or_reuse_pending_relationship, normalize_email
 import uuid
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -36,6 +37,7 @@ def _build_canonical_invite_redirect(
     inviter_email: Optional[str],
     inviter_name: str,
     inviter_id: str,
+    group_id: Optional[str] = None,
 ) -> str:
     """
     Normalize invite redirects so invitees always land in onboarding with prefilled context.
@@ -48,6 +50,8 @@ def _build_canonical_invite_redirect(
         "inviterName": inviter_name,
         "invitedBy": inviter_id,
     }
+    if group_id:
+        invite_params["groupId"] = group_id
     if inviter_email:
         invite_params["partnerEmail"] = inviter_email.lower()
 
@@ -206,19 +210,11 @@ async def invite_partner(
     - If authenticated: Uses current_user_id from token
     - If not authenticated: Uses inviter_user_id from request body (for onboarding flow)
 
-    Requires SUPABASE_SERVICE_ROLE_KEY to be configured.
+    Requires SUPABASE_SERVICE_ROLE_KEY when INVITE_EMAIL_DELIVERY_ENABLED=true.
     """
     logger.info(f"Partner invitation request: partner_email={invite_data.partner_email}, "
                 f"authenticated_user={current_user_id}, "
                 f"inviter_user_id_from_body={invite_data.inviter_user_id}")
-
-    # Check if admin client is configured
-    if not is_admin_configured():
-        logger.error("Partner invitation failed: SUPABASE_SERVICE_ROLE_KEY not configured")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Partner invitation feature is not configured. Please set SUPABASE_SERVICE_ROLE_KEY."
-        )
 
     # Determine the inviter user ID
     # Priority: authenticated user > body parameter
@@ -231,15 +227,30 @@ async def invite_partner(
             detail="User ID is required. Provide authentication or inviterUserId in body."
         )
 
-    # Get inviter user details if they exist in our DB
+    # Get inviter user details from our DB; this is required so the backend can
+    # own pending relationship state before any email is delivered.
     inviter_email = invite_data.inviter_email
     try:
         inviter = db.query(User).filter(User.id == uuid.UUID(inviter_id)).first()
-        inviter_name = inviter.name if inviter else invite_data.inviter_name
-        inviter_email = inviter.email if inviter else inviter_email
-    except Exception:
-        # If user not in our DB yet (during onboarding), use provided name
-        inviter_name = invite_data.inviter_name
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid inviter user ID")
+
+    if not inviter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inviter user not found")
+
+    inviter_name = inviter.name or invite_data.inviter_name
+    inviter_email = inviter.email if inviter else inviter_email
+
+    if normalize_email(str(invite_data.partner_email)) == normalize_email(inviter.email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot invite yourself")
+
+    group = create_or_reuse_pending_relationship(
+        db,
+        inviter=inviter,
+        invited_email=str(invite_data.partner_email),
+    )
+    db.commit()
+    db.refresh(group)
 
     try:
         # Redirect priority:
@@ -265,26 +276,40 @@ async def invite_partner(
             inviter_email=inviter_email,
             inviter_name=inviter_name,
             inviter_id=inviter_id,
+            group_id=str(group.id),
         )
 
-        # Send invitation using direct HTTP call to Supabase Admin API
-        # This avoids dependency issues with the supabase-py client
-        await invite_user_by_email(
-            email=invite_data.partner_email,
-            redirect_to=redirect_to,
-            data={
-                "invited_by": inviter_id,
-                "inviter_name": inviter_name,
-                "inviter_email": inviter_email,
-                "needs_onboarding": True,
-            }
-        )
+        if settings.INVITE_EMAIL_DELIVERY_ENABLED:
+            if not is_admin_configured():
+                logger.error("Partner invitation failed: SUPABASE_SERVICE_ROLE_KEY not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Partner invitation feature is not configured. Please set SUPABASE_SERVICE_ROLE_KEY."
+                )
+
+            # Send invitation using direct HTTP call to Supabase Admin API.
+            # This avoids dependency issues with the supabase-py client.
+            await invite_user_by_email(
+                email=invite_data.partner_email,
+                redirect_to=redirect_to,
+                data={
+                    "invited_by": inviter_id,
+                    "inviter_name": inviter_name,
+                    "inviter_email": inviter_email,
+                    "group_id": str(group.id),
+                    "needs_onboarding": True,
+                }
+            )
+        else:
+            logger.info("Invite email delivery disabled; returning invite URL without sending email")
 
         logger.info(f"Partner invitation sent successfully to {invite_data.partner_email} by user {inviter_id}")
 
         return InvitePartnerResponse(
             success=True,
-            message=f"Invitation sent to {invite_data.partner_email}"
+            message=f"Invitation prepared for {invite_data.partner_email}",
+            group_id=group.id,
+            invite_url=redirect_to,
         )
 
     except httpx.HTTPStatusError as e:

@@ -74,9 +74,11 @@ class Group(Base):
     partner2_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
-    status = Column(String(50), default="active", nullable=False)  # 'active', 'inactive'
+    partner2_email = Column(String(255), nullable=True, index=True)
+    invite_token = Column(String(64), nullable=True, unique=True, index=True)
+    status = Column(String(50), default="active", nullable=False)  # 'pending', 'active', 'inactive'
 
     created_at = Column(DateTime, default=func.now(), nullable=False)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)

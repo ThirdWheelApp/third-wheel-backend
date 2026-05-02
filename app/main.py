@@ -197,6 +197,31 @@ def run_schema_migrations():
             logger.warning(f"Migration warning (user FK cascades): {e}")
             conn.rollback()
 
+        # Migration: Support pending relationship invites before partner signup.
+        try:
+            conn.execute(text("""
+                ALTER TABLE groups ALTER COLUMN partner2_id DROP NOT NULL
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS partner2_email VARCHAR(255)
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_token VARCHAR(64)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_groups_partner2_email ON groups(partner2_email)
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_invite_token_unique
+                ON groups(invite_token)
+                WHERE invite_token IS NOT NULL
+            """))
+            conn.commit()
+            logger.info("Migration: pending relationship invite columns ready")
+        except Exception as e:
+            logger.warning(f"Migration warning (pending invites): {e}")
+            conn.rollback()
+
 
 def initialize_database_schema():
     """

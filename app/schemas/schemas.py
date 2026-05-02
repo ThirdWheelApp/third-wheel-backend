@@ -71,6 +71,8 @@ class InvitePartnerResponse(CamelCaseModel):
     """Schema for partner invitation response."""
     success: bool
     message: str
+    group_id: Optional[UUID] = None
+    invite_url: Optional[str] = None
 
 
 # ============================================================================
@@ -84,6 +86,14 @@ class GroupCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class GroupAcceptInviteRequest(BaseModel):
+    """Schema for accepting a pending partner invitation."""
+    invited_by: Optional[str] = Field(None, alias="invitedBy")
+    group_id: Optional[str] = Field(None, alias="groupId")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class GroupResponse(CamelCaseModel):
     """
     Schema for group API responses.
@@ -93,7 +103,8 @@ class GroupResponse(CamelCaseModel):
     """
     id: UUID
     partner1_id: UUID
-    partner2_id: UUID
+    partner2_id: Optional[UUID] = None
+    partner2_email: Optional[str] = None
     status: str
     created_at: datetime
 

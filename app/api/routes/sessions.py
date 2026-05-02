@@ -68,11 +68,14 @@ async def create_session(
         if group.partner1_id != current_user_uuid and group.partner2_id != current_user_uuid:
             raise HTTPException(status_code=403, detail="Not authorized for this group")
 
-        partner_ids = {str(group.partner1_id), str(group.partner2_id)}
         if session_data.session_type == "private":
             session_data.participants = [current_user_id]
-        elif set(session_data.participants) != partner_ids:
-            session_data.participants = list(partner_ids)
+        elif group.status != "active" or not group.partner2_id:
+            raise HTTPException(status_code=400, detail="Partner must accept the invite before joint sessions")
+        else:
+            partner_ids = {str(group.partner1_id), str(group.partner2_id)}
+            if set(session_data.participants) != partner_ids:
+                session_data.participants = list(partner_ids)
 
     try:
         service = SessionService(db)
