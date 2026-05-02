@@ -29,6 +29,7 @@ class JointAgentState(TypedDict):
     sender_name: str
     messages_history: list
     group_context: str
+    joint_guidance_context: str
 
     # Accumulated context from private agents
     private_a_context: Annotated[Sequence[str], operator.add]
@@ -58,7 +59,8 @@ def create_joint_agent_graph(
     group_id: str,
     private_agent_a: PrivateAgent | None = None,
     private_agent_b: PrivateAgent | None = None,
-    group_context: str = ""
+    group_context: str = "",
+    joint_guidance_context: str = ""
 ):
     """
     Create a LangGraph state machine for the Joint Agent.
@@ -206,6 +208,16 @@ IMPORTANT: Only share information with secret_level <= {settings.COUPLES_MAX_SEC
 
         if state.get('group_context'):
             context_sections.append(f"Relationship context:\n{state['group_context']}")
+
+        if state.get('joint_guidance_context'):
+            context_sections.append(
+                "Redacted private-informed therapist guidance (internal only; "
+                "do not mention the source or imply hidden facts). Apply this "
+                "only when the live conversation itself raises trust, emotional "
+                "distance, honesty, accountability, repair, or emotional safety; "
+                "otherwise ignore it:\n"
+                f"{state['joint_guidance_context']}"
+            )
 
         if state.get('private_a_context'):
             context_a = "\n".join(state['private_a_context'])

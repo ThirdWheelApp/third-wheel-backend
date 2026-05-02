@@ -10,15 +10,19 @@ from app.db.models import (
     Session as SessionModel,
     Message,
     PrivateUserContext,
-    GroupContext
+    GroupContext,
+    JointGuidanceContext
 )
 from app.config.settings import settings
 from app.demo import get_llm_client
 from app.config.prompts import (
     CONTEXT_EXTRACTION_SYSTEM_PROMPT,
     CONTEXT_EXTRACTION_PROMPT_TEMPLATE,
+    JOINT_GUIDANCE_EXTRACTION_SYSTEM_PROMPT,
+    JOINT_GUIDANCE_EXTRACTION_PROMPT_TEMPLATE,
     format_messages_for_llm
 )
+from app.services.privacy_boundary_service import PrivacyBoundaryService
 from app.utils.logger import get_logger
 import uuid
 import json
@@ -298,7 +302,8 @@ class ContextService:
             # Save private contexts for User A
             if len(session.participants) >= 1:
                 user_a_id = session.participants[0]
-                for ctx_data in extracted_data.get('user_a_contexts', []):
+                user_a_contexts = extracted_data.get('user_a_contexts', [])
+                for ctx_data in user_a_contexts:
                     context = PrivateUserContext(
                         user_id=user_a_id,
                         group_id=session.group_id,
@@ -311,6 +316,25 @@ class ContextService:
                         created_at=datetime.utcnow()
                     )
                     self.db.add(context)
+
+                if session.type == 'private' and session.group_id and user_a_contexts:
+                    guidance_data = await self._derive_joint_guidance_for_private_contexts(
+                        user_a_contexts
+                    )
+                    guidance = JointGuidanceContext(
+                        id=uuid.uuid4(),
+                        group_id=session.group_id,
+                        subject_user_id=user_a_id,
+                        source_session_id=session.id,
+                        data={
+                            **guidance_data,
+                            'created_at': datetime.utcnow().isoformat(),
+                            'source_session_id': str(session.id)
+                        },
+                        active=True,
+                        created_at=datetime.utcnow()
+                    )
+                    self.db.add(guidance)
 
             # Save private contexts for User B (joint sessions only)
             if session.type == 'joint' and len(session.participants) >= 2:
@@ -352,3 +376,39 @@ class ContextService:
             logger.error(f"Error saving contexts: {e}", exc_info=True)
             self.db.rollback()
             raise
+
+    async def _derive_joint_guidance_for_private_contexts(
+        self,
+        private_contexts: List[Dict]
+    ) -> Dict:
+        """
+        Convert private raw memory into redacted joint-session guidance.
+
+        The LLM is allowed to see raw private contexts here because this is a
+        private-session post-processing step. Its output is privacy-guarded
+        before being stored for joint-session use.
+        """
+        fallback = PrivacyBoundaryService.build_fallback_joint_guidance(private_contexts)
+        if not private_contexts:
+            return fallback
+
+        prompt = JOINT_GUIDANCE_EXTRACTION_PROMPT_TEMPLATE.format(
+            private_contexts=json.dumps(private_contexts, indent=2)
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=700,
+                temperature=0.2,
+                system=JOINT_GUIDANCE_EXTRACTION_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            payload = extract_json_from_response(response.content[0].text) or {}
+            return PrivacyBoundaryService.sanitize_joint_guidance(
+                payload,
+                source_contexts=private_contexts
+            )
+        except Exception as e:
+            logger.warning(f"Failed to derive model joint guidance, using fallback: {e}")
+            return fallback

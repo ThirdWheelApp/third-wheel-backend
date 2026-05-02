@@ -120,7 +120,7 @@ In Railway Dashboard → Your Service → **Variables**, add:
 | `SUPABASE_JWT_SECRET` | Yes | From Supabase → Settings → API → JWT Settings |
 | `ANTHROPIC_API_KEY` | If !demo | Your Anthropic API key |
 | `DEMO_MODE` | No | Set `true` for mock LLM responses |
-| `LLM_MODEL` | No | Default: `claude-3-haiku-20240307` |
+| `LLM_MODEL` | No | Default: `claude-haiku-4-5-20251001` |
 | `ENVIRONMENT` | No | Set to `production` |
 | `ALLOWED_ORIGINS` | Yes | Frontend URLs, comma-separated |
 | `LOG_LEVEL` | No | Default: `INFO` |
@@ -257,7 +257,7 @@ All configuration via environment variables:
 | `INVITE_REDIRECT_URL` | No | request origin or deep link | Redirect URL used in invite emails |
 | `DEMO_MODE` | No | false | Use mock LLM responses |
 | `ANTHROPIC_API_KEY` | If !demo | - | Anthropic API key |
-| `LLM_MODEL` | No | claude-3-haiku | Model to use |
+| `LLM_MODEL` | No | claude-haiku-4-5 | Model to use |
 | `ENVIRONMENT` | No | development | development/production |
 | `SECRET_LEVEL_THRESHOLD` | No | 5 | Context sharing threshold |
 | `COUPLES_MAX_SECRET_LEVEL` | No | 0 | Max private-context secrecy allowed in couples sessions |

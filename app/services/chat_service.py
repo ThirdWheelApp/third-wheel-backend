@@ -12,6 +12,7 @@ from app.agents.private_agent.repo import PrivateAgentRepository
 from app.agents.joint_agent.agent import JointAgent
 from app.agents.joint_agent.repo import JointAgentRepository
 from app.services.therapist_notes_service import TherapistNotesService
+from app.services.privacy_boundary_service import PrivacyBoundaryService
 from app.utils.logger import get_logger
 from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable, List
 import uuid
@@ -61,6 +62,7 @@ class ChatService:
 
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        self._ensure_user_can_chat(session, user_id, expected_type="private")
 
         # Get user
         user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
@@ -184,6 +186,7 @@ class ChatService:
 
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        self._ensure_user_can_chat(session, user_id, expected_type="private")
 
         # Get user
         user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
@@ -308,6 +311,7 @@ class ChatService:
 
         if not session:
             raise ValueError(f"Session {session_id} not found")
+        self._ensure_user_can_chat(session, user_id, expected_type="joint")
 
         # Get user
         user = self.db.query(User).filter(User.id == uuid.UUID(user_id)).first()
@@ -393,6 +397,16 @@ class ChatService:
             messages_history,
             accumulated_context
         )
+        privacy_check = PrivacyBoundaryService.validate_joint_response(response_text)
+        if not privacy_check.ok:
+            logger.warning(
+                f"Joint response failed privacy validation ({privacy_check.reasons}); replacing response."
+            )
+            response_text = (
+                "Let's slow down and stay with what each of you is ready to say here together. "
+                "What feels most important to name about trust, distance, or repair right now?"
+            )
+            suggest_end = False
 
         # Update session context
         session.current_context = updated_context
@@ -454,6 +468,21 @@ class ChatService:
         ).order_by(Message.sequence_number.desc()).first()
 
         return (max_seq[0] + 1) if max_seq else 1
+
+    def _ensure_user_can_chat(
+        self,
+        session: SessionModel,
+        user_id: str,
+        expected_type: Optional[str] = None
+    ) -> None:
+        """Validate that the user can send messages in this session."""
+        user_uuid = uuid.UUID(user_id)
+        if user_uuid not in session.participants:
+            raise PermissionError("Not authorized to access this session")
+        if expected_type and session.type != expected_type:
+            raise ValueError(f"Session {session.id} is not a {expected_type} session")
+        if session.type == "joint" and not session.group_id:
+            raise ValueError("Joint sessions require a group_id")
 
     def _log_llm_call(self, session_id: str, metrics: Dict):
         """Log LLM call for monitoring and cost tracking."""

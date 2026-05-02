@@ -13,6 +13,7 @@ from app.websocket.chat_handler import ChatHandler
 from app.utils.auth import get_user_from_token
 from app.utils.logger import get_logger
 from typing import Optional, List
+import uuid
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -116,6 +117,32 @@ async def _handle_websocket_chat(
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Invalid or expired authentication token",
+        )
+        return
+
+    try:
+        from app.db.models import Session as SessionModel
+
+        session = db.query(SessionModel).filter(
+            SessionModel.id == uuid.UUID(session_id)
+        ).first()
+        if not session:
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="Session not found",
+            )
+            return
+        if uuid.UUID(token_user_id) not in session.participants:
+            logger.warning(f"User {token_user_id} attempted WebSocket access to session {session_id}")
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="Not authorized for this session",
+            )
+            return
+    except ValueError:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Invalid session or user ID",
         )
         return
 

@@ -26,6 +26,8 @@ JOINT_AGENT_SYSTEM_PROMPT = """You are an AI relationship therapist facilitating
 - Normalize common relationship challenges
 - Suggest specific, actionable strategies
 - Use "I" statements when modeling communication
+- Write only what the therapist would say aloud to the couple
+- Do not include stage directions, markdown explanations, or notes about your strategy
 
 **Privacy Rules (CRITICAL):**
 - You have access to private context about each user
@@ -33,6 +35,10 @@ JOINT_AGENT_SYSTEM_PROMPT = """You are an AI relationship therapist facilitating
 - NEVER say "I know something but can't share it"
 - Use private context to inform questions and suggestions ONLY
 - If you know something private, ask questions that help the person share it themselves
+- Use private-informed guidance only when the live joint conversation itself raises trust, emotional distance, honesty, accountability, repair, or emotional safety
+- If the live conversation is about unrelated practical topics, ignore private-informed guidance and respond only to what the partners have said openly
+- For practical topics such as chores, scheduling, logistics, or task division, stay concrete and collaborative; do not imply there is a hidden, deeper, unspoken, or "really going on underneath" issue unless a partner explicitly raises that
+- Avoid hidden-issue phrasing like "what's really going on underneath," "under the surface," "something deeper," or "unspoken" unless a partner has openly framed the topic that way
 
 **Session Flow:**
 - Welcome both partners warmly
@@ -234,6 +240,31 @@ Return a JSON object with this structure:
 }}
 """
 
+JOINT_GUIDANCE_EXTRACTION_SYSTEM_PROMPT = """You convert private therapy memory into redacted internal guidance for a couples therapist.
+
+Rules:
+- Do NOT include exact private facts, events, names, admissions, or labels.
+- Do NOT use words such as cheating, affair, infidelity, secret, or private session.
+- Do NOT say that something was disclosed privately.
+- Convert sensitive facts into general therapeutic strategy: emotions, readiness, patterns, safety, accountability, trust, repair, and pacing.
+- The output is internal guidance only, not something to say to either partner.
+
+Return a JSON object only."""
+
+JOINT_GUIDANCE_EXTRACTION_PROMPT_TEMPLATE = """Create redacted joint-session therapist guidance from this private-session context.
+
+Private contexts:
+{private_contexts}
+
+Return JSON with this shape:
+{{
+  "guidance": "non-revealing therapist strategy for future joint sessions",
+  "topics": ["broad-topic"],
+  "avoid_terms": ["specific words or concepts the joint therapist must avoid"],
+  "sensitivity_level": 7
+}}
+"""
+
 # ============================================================================
 # SECRET LEVEL CLASSIFICATION PROMPT
 # ============================================================================
@@ -265,10 +296,31 @@ def format_context_for_llm(contexts: list[dict]) -> str:
 
     formatted = []
     for ctx in contexts:
-        data = ctx.get('data', {})
+        data = ctx.get('data') if isinstance(ctx.get('data'), dict) else ctx
         text = data.get('text', '')
         tags = ', '.join(data.get('tags', []))
-        formatted.append(f"- {text} (tags: {tags})")
+        if text:
+            formatted.append(f"- {text} (tags: {tags})")
+
+    return "\n".join(formatted) if formatted else "No previous context available."
+
+
+def format_joint_guidance_for_llm(guidance_contexts: list[dict]) -> str:
+    """Format redacted internal guidance for the joint therapist prompt.
+
+    Stored metadata such as sensitive topic labels and avoid terms is
+    intentionally omitted here. The joint agent should receive therapeutic
+    strategy, not the raw category of the private disclosure.
+    """
+    if not guidance_contexts:
+        return ""
+
+    formatted = []
+    for ctx in guidance_contexts:
+        data = ctx.get('data') if isinstance(ctx.get('data'), dict) else ctx
+        guidance = (data or {}).get('guidance', '')
+        if guidance:
+            formatted.append(f"- Guidance: {guidance}")
 
     return "\n".join(formatted)
 

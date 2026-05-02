@@ -84,6 +84,7 @@ class Group(Base):
     # Relationships
     sessions = relationship("Session", back_populates="group", cascade="all, delete-orphan")
     group_contexts = relationship("GroupContext", back_populates="group", cascade="all, delete-orphan")
+    joint_guidance_contexts = relationship("JointGuidanceContext", back_populates="group", cascade="all, delete-orphan")
     check_ins = relationship("CheckIn", back_populates="group", cascade="all, delete-orphan")
 
     # Indexes
@@ -283,6 +284,38 @@ class GroupContext(Base):
     # Indexes
     __table_args__ = (
         Index('idx_group_context_group', 'group_id', 'created_at'),
+    )
+
+
+class JointGuidanceContext(Base):
+    """
+    Redacted therapist guidance derived from private sessions.
+
+    This table must never store raw private facts. It stores only internal,
+    non-revealing strategy that can help a joint-session therapist navigate
+    sensitive dynamics without exposing what was said privately.
+    """
+    __tablename__ = "joint_guidance_context"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    subject_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    source_session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
+
+    # Structure: {guidance, topics, avoid_terms, sensitivity_level, source, created_at}
+    data = Column(JSONB, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    group = relationship("Group", back_populates="joint_guidance_contexts")
+
+    __table_args__ = (
+        Index('idx_joint_guidance_group', 'group_id', 'created_at'),
+        Index('idx_joint_guidance_subject', 'subject_user_id', 'group_id'),
     )
 
 

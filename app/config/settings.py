@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     # ==========================================
     # LLM CONFIGURATION
     # ==========================================
-    # Model to use for LLM calls (claude-3-haiku is cheapest, sonnet is smartest)
-    LLM_MODEL: str = "claude-3-haiku-20240307"
+    # Model to use for LLM calls (Haiku is cheapest, Sonnet is smarter)
+    LLM_MODEL: str = "claude-haiku-4-5-20251001"
 
     # Temperature for LLM responses (0-1, higher = more creative)
     LLM_TEMPERATURE: float = 0.7

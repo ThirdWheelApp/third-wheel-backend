@@ -5,7 +5,7 @@ Session API Routes
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.db.models import Session as SessionModel, Message
+from app.db.models import Session as SessionModel, Message, Group
 from app.services.session_service import SessionService
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
@@ -38,6 +38,12 @@ async def create_session(
                 f"user={current_user_id}, "
                 f"participants={session_data.participants}")
 
+    if session_data.session_type not in {"private", "joint"}:
+        raise HTTPException(
+            status_code=400,
+            detail="sessionType must be 'private' or 'joint'"
+        )
+
     # Joint sessions require a group/relationship
     if session_data.session_type == "joint" and not session_data.group_id:
         logger.warning(f"Session creation failed: Joint session without group_id")
@@ -48,6 +54,25 @@ async def create_session(
 
     if current_user_id not in session_data.participants:
         session_data.participants.append(current_user_id)
+
+    if session_data.group_id:
+        try:
+            group_uuid = uuid.UUID(session_data.group_id)
+            current_user_uuid = uuid.UUID(current_user_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid group or user ID")
+
+        group = db.query(Group).filter(Group.id == group_uuid).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        if group.partner1_id != current_user_uuid and group.partner2_id != current_user_uuid:
+            raise HTTPException(status_code=403, detail="Not authorized for this group")
+
+        partner_ids = {str(group.partner1_id), str(group.partner2_id)}
+        if session_data.session_type == "private":
+            session_data.participants = [current_user_id]
+        elif set(session_data.participants) != partner_ids:
+            session_data.participants = list(partner_ids)
 
     try:
         service = SessionService(db)

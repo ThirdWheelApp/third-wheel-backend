@@ -10,7 +10,7 @@ from app.demo import get_llm_client
 from app.agents.joint_agent.repo import JointAgentRepository
 from app.agents.joint_agent.graph import create_joint_agent_graph
 from app.agents.private_agent.agent import PrivateAgent
-from app.config.prompts import format_context_for_llm
+from app.config.prompts import format_context_for_llm, format_joint_guidance_for_llm
 from app.utils.logger import get_logger
 from typing import Dict, Optional, Tuple
 import asyncio
@@ -55,6 +55,8 @@ class JointAgent:
         # Load group context once
         group_contexts = self.repo.get_group_context(group_id)
         self.group_context_text = format_context_for_llm(group_contexts)
+        joint_guidance_contexts = self.repo.get_joint_guidance_context(group_id)
+        self.joint_guidance_text = format_joint_guidance_for_llm(joint_guidance_contexts)
 
         # Persistent state across messages in same session
         self.accumulated_state = {
@@ -112,7 +114,8 @@ class JointAgent:
             group_id=self.group_id,
             private_agent_a=self.private_agent_a,
             private_agent_b=self.private_agent_b,
-            group_context=self.group_context_text
+            group_context=self.group_context_text,
+            joint_guidance_context=self.joint_guidance_text
         )
 
         # Prepare initial state
@@ -121,6 +124,7 @@ class JointAgent:
             'sender_name': sender_name,
             'messages_history': messages_history,
             'group_context': self.group_context_text,
+            'joint_guidance_context': self.joint_guidance_text,
             'private_a_context': self.accumulated_state['private_a_context'],
             'private_b_context': self.accumulated_state['private_b_context'],
             'query_count_a': self.accumulated_state['query_count_a'],
