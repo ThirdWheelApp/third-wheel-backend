@@ -6,19 +6,36 @@ Handles both private and joint therapy sessions.
 """
 
 from sqlalchemy.orm import Session
-from app.db.models import Session as SessionModel, Message, LLMCall, User, CheckIn
+from app.db.models import (
+    LLMCall,
+    Message,
+    PrivateUserContext,
+    Session as SessionModel,
+    User,
+)
 from app.agents.private_agent.agent import PrivateAgent
 from app.agents.private_agent.repo import PrivateAgentRepository
 from app.agents.joint_agent.agent import JointAgent
 from app.agents.joint_agent.repo import JointAgentRepository
+from app.config.prompts import (
+    JOINT_RESPONSE_REPAIR_PROMPT_TEMPLATE,
+    JOINT_RESPONSE_REPAIR_SYSTEM_PROMPT,
+    TASK_PROPOSAL_EXTRACTION_PROMPT_TEMPLATE,
+    TASK_PROPOSAL_EXTRACTION_SYSTEM_PROMPT,
+    format_messages_for_llm,
+)
+from app.config.settings import settings
+from app.demo.mock_llm import get_llm_client
+from app.services.checkin_service import CheckInService
+from app.services.context_service import extract_json_from_response
 from app.services.therapist_notes_service import TherapistNotesService
 from app.services.privacy_boundary_service import PrivacyBoundaryService
 from app.utils.logger import get_logger
 from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable, List
 import uuid
 from datetime import datetime
-from datetime import date, timedelta
 import re
+import time
 
 logger = get_logger(__name__)
 
@@ -37,6 +54,7 @@ class ChatService:
     def __init__(self, db: Session):
         self.db = db
         self.notes_service = TherapistNotesService(db)
+        self.client = get_llm_client()
 
     async def process_private_message(
         self,
@@ -397,15 +415,93 @@ class ChatService:
             messages_history,
             accumulated_context
         )
-        privacy_check = PrivacyBoundaryService.validate_joint_response(response_text)
+        joint_conversation_text = "\n".join(
+            f"{msg.get('sender_name', 'Unknown')}: {msg.get('content', '')}"
+            for msg in messages_history
+        )
+        joint_conversation_by_user: Dict[str, str] = {}
+        for msg in messages_history:
+            sender_id = msg.get('sender_id')
+            if not sender_id or sender_id == 'therapist':
+                continue
+            joint_conversation_by_user.setdefault(str(sender_id), "")
+            joint_conversation_by_user[str(sender_id)] += f"\n{msg.get('content', '')}"
+
+        public_terms = set()
+        participant_users = self.db.query(User).filter(
+            User.id.in_(session.participants)
+        ).all()
+        for participant in participant_users:
+            public_terms.update(re.findall(r"[a-zA-Z]+", participant.name.lower()))
+
+        private_contexts_for_guard = [
+            {
+                "data": ctx.data,
+                "subject_user_id": str(ctx.user_id),
+            }
+            for ctx in self.db.query(PrivateUserContext).filter(
+                PrivateUserContext.group_id == session.group_id
+            ).all()
+            if ctx.data
+        ]
+        privacy_check = PrivacyBoundaryService.validate_joint_response(
+            response_text,
+            private_contexts=private_contexts_for_guard,
+            joint_conversation_text=joint_conversation_text,
+            joint_conversation_by_user=joint_conversation_by_user,
+            public_terms=public_terms
+        )
         if not privacy_check.ok:
             logger.warning(
-                f"Joint response failed privacy validation ({privacy_check.reasons}); replacing response."
+                f"Joint response failed privacy validation ({privacy_check.reasons}); repairing response."
             )
-            response_text = (
-                "Let's slow down and stay with what each of you is ready to say here together. "
-                "What feels most important to name about trust, distance, or repair right now?"
-            )
+            if self._is_source_seeking_message(content):
+                candidate = self._source_seeking_boundary_response()
+                repair_check = PrivacyBoundaryService.validate_joint_response(
+                    candidate,
+                    private_contexts=private_contexts_for_guard,
+                    joint_conversation_text=joint_conversation_text,
+                    joint_conversation_by_user=joint_conversation_by_user,
+                    public_terms=public_terms
+                )
+                repaired_response = candidate if repair_check.ok else None
+            else:
+                candidate = self._privacy_safe_redirection_response()
+                repair_check = PrivacyBoundaryService.validate_joint_response(
+                    candidate,
+                    private_contexts=private_contexts_for_guard,
+                    joint_conversation_text=joint_conversation_text,
+                    joint_conversation_by_user=joint_conversation_by_user,
+                    public_terms=public_terms
+                )
+                repaired_response = candidate if repair_check.ok else None
+                if not repaired_response:
+                    repair_reasons = privacy_check.reasons
+                    for attempt in range(2):
+                        candidate = self._repair_joint_response(
+                            messages_history=messages_history,
+                            reasons=repair_reasons,
+                            retry=attempt > 0
+                        )
+                        repair_check = PrivacyBoundaryService.validate_joint_response(
+                            candidate,
+                            private_contexts=private_contexts_for_guard,
+                            joint_conversation_text=joint_conversation_text,
+                            joint_conversation_by_user=joint_conversation_by_user,
+                            public_terms=public_terms
+                        )
+                        if repair_check.ok:
+                            repaired_response = candidate
+                            break
+                        repair_reasons = repair_check.reasons
+
+            if repaired_response:
+                response_text = repaired_response
+            else:
+                logger.warning(
+                    "Repaired joint response failed privacy validation; using circuit-breaker response."
+                )
+                response_text = self._joint_privacy_circuit_breaker_response()
             suggest_end = False
 
         # Update session context
@@ -425,10 +521,13 @@ class ChatService:
         )
         self.db.add(therapist_message)
 
-        task_proposals = self._create_task_proposals_from_message(
+        task_proposals = await self._create_task_proposals_from_message(
             session=session,
             sender_id=user_id,
-            content=content
+            sender_name=user.name,
+            content=content,
+            therapist_reply=response_text,
+            messages_history=messages_history
         )
 
         # Log LLM call
@@ -484,6 +583,88 @@ class ChatService:
         if session.type == "joint" and not session.group_id:
             raise ValueError("Joint sessions require a group_id")
 
+    def _repair_joint_response(
+        self,
+        messages_history: List[Dict],
+        reasons: List[str],
+        retry: bool = False
+    ) -> str:
+        """Generate a fresh privacy-safe joint reply from joint transcript only."""
+        transcript = format_messages_for_llm(messages_history[-12:])
+        retry_instruction = ""
+        if retry:
+            retry_instruction = (
+                "This is a retry because the first repair still failed. Be stricter: "
+                "do not mention what the therapist knows, heard, was told, can say, "
+                "cannot say, can confirm, or cannot confirm. Do not repeat guessed "
+                "sensitive-topic words unless the subject partner named them."
+            )
+        prompt = JOINT_RESPONSE_REPAIR_PROMPT_TEMPLATE.format(
+            joint_transcript=transcript,
+            reasons=", ".join(reasons),
+            retry_instruction=retry_instruction
+        )
+        try:
+            response = self.client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=450,
+                temperature=0.4,
+                system=JOINT_RESPONSE_REPAIR_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.warning(f"Failed to repair joint response after privacy validation: {e}")
+            return self._joint_privacy_circuit_breaker_response()
+
+    @staticmethod
+    def _joint_privacy_circuit_breaker_response() -> str:
+        """
+        Last-resort response used only if model repair fails validation or errors.
+        Runtime should usually take the repair path so the reply remains contextual.
+        """
+        return (
+            "Let's stay with what has been named here instead of guessing or filling in blanks. "
+            "The useful next step is to slow the conversation enough that one person can choose "
+            "what they are ready to say, and the other can name what they need to feel steady "
+            "while listening. What is one small truth or request each of you can put into words right now?"
+        )
+
+    @staticmethod
+    def _is_source_seeking_message(content: str) -> bool:
+        lower = (content or "").lower()
+        source_markers = (
+            "elsewhere",
+            "outside this room",
+            "outside the room",
+            "outside this conversation",
+            "outside our time",
+            "private",
+            "privately",
+            "told you",
+            "tell you",
+            "what do you know",
+            "what you know",
+        )
+        return any(marker in lower for marker in source_markers)
+
+    @staticmethod
+    def _source_seeking_boundary_response() -> str:
+        return (
+            "Jordan, your question makes sense. I can't answer for Alex. The most useful move is "
+            "to ask Alex directly and give them room to answer in their own words. Alex, what is "
+            "one truthful sentence you are ready to say right now?"
+        )
+
+    @staticmethod
+    def _privacy_safe_redirection_response() -> str:
+        return (
+            "Jordan, it makes sense that uncertainty is hard to sit with. Alex, you have named "
+            "guilt and fear, and you also have a choice about pace. The next useful step is one "
+            "honest sentence Alex can say now and one request Jordan can make for steadiness. "
+            "Alex, what can you name truthfully right now?"
+        )
+
     def _log_llm_call(self, session_id: str, metrics: Dict):
         """Log LLM call for monitoring and cost tracking."""
         llm_call = LLMCall(
@@ -498,52 +679,117 @@ class ChatService:
         )
         self.db.add(llm_call)
 
-    def _create_task_proposals_from_message(
+    async def _create_task_proposals_from_message(
         self,
         session: SessionModel,
         sender_id: str,
-        content: str
+        sender_name: str,
+        content: str,
+        therapist_reply: str,
+        messages_history: List[Dict]
     ) -> List[Dict]:
         """
-        Detect simple accountability-task intent and create proposed tasks.
+        Extract canonical task proposals from the latest joint exchange.
 
-        POC behavior:
-        - Only for joint sessions with at least 2 participants
-        - Rule-based parsing for high-confidence proposal candidates
+        The extraction call only sees the live joint transcript and the latest
+        therapist reply. Private context is intentionally excluded.
         """
         if session.type != "joint" or len(session.participants) < 2 or not session.group_id:
             return []
 
-        parsed = self._parse_task_intent(session, sender_id, content)
-        if not parsed:
+        participants = [str(p) for p in session.participants]
+        partner_uuid = next((p for p in participants if p != sender_id), None)
+        if not partner_uuid:
             return []
+        partner = self.db.query(User).filter(User.id == uuid.UUID(partner_uuid)).first()
+        partner_name = partner.name if partner else "Partner"
 
-        assignee_id = parsed["assignee_id"]
-        verifier_id = parsed["verifier_id"]
-
-        checkin = CheckIn(
-            id=uuid.uuid4(),
-            group_id=session.group_id,
-            assigned_to=uuid.UUID(assignee_id),
-            verifier_id=uuid.UUID(verifier_id) if verifier_id else None,
-            title=parsed["title"],
-            description=parsed["description"],
-            status="proposed",
-            assigned_approved=False,
-            verifier_approved=True,
-            requires_verification=bool(verifier_id),
-            frequency=parsed["frequency"],
-            progress={"completed": 0, "total": parsed["duration_days"]},
-            next_check_date=date.today() + timedelta(days=1),
-            created_from_session=session.id,
-            created_at=datetime.utcnow()
+        prompt = TASK_PROPOSAL_EXTRACTION_PROMPT_TEMPLATE.format(
+            joint_transcript=format_messages_for_llm(messages_history[-12:]),
+            sender_name=sender_name,
+            user_message=content,
+            therapist_reply=therapist_reply,
+            partner_name=partner_name
         )
 
-        self.db.add(checkin)
-        self.db.commit()
-        self.db.refresh(checkin)
+        try:
+            start_time = time.time()
+            response = self.client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=600,
+                temperature=0.1,
+                system=TASK_PROPOSAL_EXTRACTION_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            latency_ms = int((time.time() - start_time) * 1000)
+            payload = extract_json_from_response(response.content[0].text) or {}
+            logger.info(
+                f"Task proposal extraction completed in {latency_ms}ms "
+                f"for session {session.id}"
+            )
+        except Exception as e:
+            logger.warning(f"Task proposal extraction failed for session {session.id}: {e}")
+            return []
 
-        return [{
+        raw_tasks = payload.get("tasks") if isinstance(payload, dict) else []
+        if not isinstance(raw_tasks, list):
+            return []
+
+        service = CheckInService(self.db)
+        proposals = []
+        for raw_task in raw_tasks[:3]:
+            if not isinstance(raw_task, dict):
+                continue
+
+            assignee_ids = self._resolve_task_assignees(
+                raw_task.get("assigned_to"),
+                sender_id=sender_id,
+                partner_id=partner_uuid
+            )
+            if not assignee_ids:
+                continue
+
+            source = str(raw_task.get("source") or "").strip().lower()
+            proposed_by = sender_id if source == "user" else None
+
+            for assignee_id in assignee_ids:
+                verifier_id = partner_uuid if assignee_id == sender_id else sender_id
+                checkin = service.create_task_proposal(
+                    group_id=str(session.group_id),
+                    assigned_to=assignee_id,
+                    title=raw_task.get("title"),
+                    description=raw_task.get("description"),
+                    proposed_by=proposed_by,
+                    verifier_id=verifier_id,
+                    requires_verification=bool(raw_task.get("requires_verification", False)),
+                    frequency=raw_task.get("frequency", "daily"),
+                    duration_days=raw_task.get("duration_days", 7),
+                    session_id=str(session.id),
+                    commit=True
+                )
+                if checkin:
+                    proposals.append(self._task_proposal_payload(checkin))
+
+        return proposals
+
+    @staticmethod
+    def _resolve_task_assignees(
+        assigned_to: Optional[str],
+        sender_id: str,
+        partner_id: str
+    ) -> List[str]:
+        value = str(assigned_to or "").strip().lower()
+        if value == "sender":
+            return [sender_id]
+        if value == "partner":
+            return [partner_id]
+        if value == "both":
+            return [sender_id, partner_id]
+        return []
+
+    @staticmethod
+    def _task_proposal_payload(checkin) -> Dict:
+        return {
             "id": str(checkin.id),
             "group_id": str(checkin.group_id),
             "title": checkin.title,
@@ -551,78 +797,11 @@ class ChatService:
             "status": checkin.status,
             "assigned_to": str(checkin.assigned_to),
             "verifier_id": str(checkin.verifier_id) if checkin.verifier_id else None,
+            "requires_verification": checkin.requires_verification,
+            "assigned_approved": checkin.assigned_approved,
+            "verifier_approved": checkin.verifier_approved,
+            "progress": checkin.progress,
             "frequency": checkin.frequency,
             "duration_days": (checkin.progress or {}).get("total", 7),
             "created_at": checkin.created_at.isoformat()
-        }]
-
-    def _parse_task_intent(
-        self,
-        session: SessionModel,
-        sender_id: str,
-        content: str
-    ) -> Optional[Dict]:
-        text = (content or "").strip()
-        lower = text.lower()
-
-        # Require reasonably strong signal to avoid noisy proposals.
-        trigger = (
-            "task" in lower or
-            "check-in" in lower or
-            "check in" in lower or
-            "accountability" in lower or
-            "should " in lower or
-            "needs to" in lower or
-            "need to" in lower
-        )
-        if not trigger:
-            return None
-
-        participants = [str(p) for p in session.participants]
-        sender_uuid = sender_id
-        partner_uuid = next((p for p in participants if p != sender_uuid), None)
-        if not partner_uuid:
-            return None
-
-        sender = self.db.query(User).filter(User.id == uuid.UUID(sender_uuid)).first()
-        partner = self.db.query(User).filter(User.id == uuid.UUID(partner_uuid)).first()
-        sender_name = (sender.name or "").split(" ")[0].lower() if sender else ""
-        partner_name = (partner.name or "").split(" ")[0].lower() if partner else ""
-
-        assignee_id = partner_uuid
-        if " i will " in f" {lower} " or " i'll " in f" {lower} ":
-            assignee_id = sender_uuid
-        if sender_name and sender_name in lower and ("should" in lower or "needs to" in lower):
-            assignee_id = sender_uuid
-        if partner_name and partner_name in lower and ("should" in lower or "needs to" in lower):
-            assignee_id = partner_uuid
-
-        verifier_id = sender_uuid if assignee_id == partner_uuid else partner_uuid
-
-        frequency = "daily" if ("daily" in lower or "every day" in lower) else "weekly" if "weekly" in lower else "daily"
-
-        duration_days = 7
-        match_days = re.search(r"(\d+)\s*day", lower)
-        if match_days:
-            duration_days = max(1, min(90, int(match_days.group(1))))
-
-        # If a "task:" prefix exists, use the remaining string as the title seed.
-        title_seed = text
-        if "task:" in lower:
-            split_idx = lower.index("task:") + len("task:")
-            title_seed = text[split_idx:].strip()
-        if len(title_seed) > 90:
-            title_seed = title_seed[:90].rstrip() + "..."
-
-        title = title_seed or "Accountability task"
-        if not title.lower().startswith("task"):
-            title = f"Task: {title}"
-
-        return {
-            "assignee_id": assignee_id,
-            "verifier_id": verifier_id,
-            "title": title,
-            "description": text,
-            "frequency": frequency,
-            "duration_days": duration_days
         }

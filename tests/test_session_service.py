@@ -131,3 +131,57 @@ def test_process_ended_private_session_concludes_after_extraction(db_session, mo
     assert result["status"] == "concluded"
     assert result["post_processing_required"] is False
     assert private_session.status == "concluded"
+
+
+def test_private_session_contexts_default_to_non_shareable(db_session):
+    user = User(
+        id=uuid.uuid4(),
+        email="alex-private-boundary@example.com",
+        name="Alex Private Boundary",
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    group = Group(
+        id=uuid.uuid4(),
+        partner1_id=user.id,
+        partner2_email="partner-private-boundary@example.com",
+        status="pending",
+    )
+    db_session.add(group)
+    db_session.commit()
+
+    private_session = Session(
+        id=uuid.uuid4(),
+        group_id=group.id,
+        type="private",
+        status="ending",
+        created_by=user.id,
+        participants=[user.id],
+    )
+
+    extracted = {
+        "user_a_contexts": [
+            {"text": "Benign but learned only in private", "secret_level": 0},
+        ],
+        "user_b_contexts": [
+            {"text": "Misassigned private context", "secret_level": 0},
+        ],
+        "group_contexts": [
+            {"text": "Should not be persisted from private session"},
+        ],
+        "check_ins": [
+            {"title": "Should not become a joint task"},
+        ],
+    }
+
+    normalized = ContextService(db_session)._normalize_extracted_data_for_session(
+        session=private_session,
+        extracted_data=extracted,
+    )
+
+    assert normalized["user_b_contexts"] == []
+    assert normalized["group_contexts"] == []
+    assert normalized["check_ins"] == []
+    assert len(normalized["user_a_contexts"]) == 2
+    assert all(ctx["secret_level"] >= 1 for ctx in normalized["user_a_contexts"])

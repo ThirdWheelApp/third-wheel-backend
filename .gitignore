@@ -56,9 +56,6 @@ htmlcov/
 *.log
 logs/
 
-# Docker
-.dockerignore
-
 # mypy
 .mypy_cache/
 .dmypy.json

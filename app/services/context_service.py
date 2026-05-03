@@ -261,6 +261,12 @@ class ContextService:
                 list(normalized['user_a_contexts']) +
                 list(normalized['user_b_contexts'])
             )
+            for ctx in merged_private_contexts:
+                try:
+                    current_level = int(ctx.get('secret_level', 5))
+                except (TypeError, ValueError):
+                    current_level = 5
+                ctx['secret_level'] = max(1, current_level)
             normalized['user_a_contexts'] = merged_private_contexts
             normalized['user_b_contexts'] = []
             normalized['group_contexts'] = []

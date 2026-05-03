@@ -217,6 +217,7 @@ class CheckInResponse(CamelCaseModel):
     verification_feedback: Optional[str] = None
     created_from_session: Optional[UUID] = None
     created_at: datetime
+    updated_at: datetime
 
 
 class CheckInApproval(BaseModel):

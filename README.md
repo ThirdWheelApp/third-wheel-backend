@@ -172,9 +172,9 @@ curl https://your-app.railway.app/health
 - `PUT /api/checkins/{id}/verify` - Verify completion
 - `GET /api/checkins/{id}` - Get check-in by ID
 
-### Tasks (POC)
+### Tasks
 - `GET /api/tasks/{group_id}` - List tasks for a group
-- `POST /api/tasks/{task_id}/decision` - Assignee accepts/rejects proposed task
+- `POST /api/tasks/{task_id}/decision` - A task participant accepts/rejects a proposed task; it activates after all required participants accept
 - `POST /api/tasks/{task_id}/checkins/{checkin_id}/complete` - Mark task done
 - `POST /api/tasks/{task_id}/verify` - Verifier approves/rejects completion
 

@@ -9,6 +9,7 @@ from app.db.models import CheckIn, User, Session as SessionModel
 from app.services.notification_service import NotificationService, NotificationType
 from app.utils.logger import get_logger
 import uuid
+import re
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
 
@@ -59,40 +60,121 @@ class CheckInService:
         if session and len(session.participants) >= 2:
             participant_tokens["user_b"] = str(session.participants[1])
 
+        participant_ids = list(participant_tokens.values())
+
         for data in checkins_data:
             assigned_raw = data.get('assigned_to')
             verifier_raw = data.get('verifier')
 
             assigned_to = self._resolve_user_reference(assigned_raw, participant_tokens)
             verifier_id = self._resolve_user_reference(verifier_raw, participant_tokens) if verifier_raw else None
+            if assigned_to and not verifier_id:
+                verifier_id = self._other_participant_id(participant_ids, assigned_to)
 
             if not assigned_to:
                 logger.warning(f"Skipping check-in with unresolved assignee: {data}")
                 continue
 
-            checkin = CheckIn(
-                id=uuid.uuid4(),
-                group_id=uuid.UUID(group_id),
-                assigned_to=uuid.UUID(assigned_to),
-                verifier_id=uuid.UUID(verifier_id) if verifier_id else None,
+            checkin = self.create_task_proposal(
+                group_id=group_id,
+                assigned_to=assigned_to,
                 title=data.get('title'),
                 description=data.get('description'),
-                status='proposed',
-                assigned_approved=False,
-                verifier_approved=None if data.get('requires_verification') else True,
-                requires_verification=data.get('requires_verification', False),
+                proposed_by=None,
+                verifier_id=verifier_id,
+                requires_verification=bool(data.get('requires_verification', False)),
                 frequency=data.get('frequency', 'daily'),
-                progress={'completed': 0, 'total': data.get('duration_days', 7)},
-                next_check_date=date.today() + timedelta(days=1),
-                created_from_session=uuid.UUID(session_id),
-                created_at=datetime.utcnow()
+                duration_days=data.get('duration_days', 7),
+                session_id=session_id,
+                commit=False
             )
 
-            self.db.add(checkin)
-            created_checkins.append(checkin)
+            if checkin:
+                created_checkins.append(checkin)
 
         self.db.commit()
         return created_checkins
+
+    def create_task_proposal(
+        self,
+        group_id: str,
+        assigned_to: str,
+        title: str,
+        description: Optional[str] = None,
+        proposed_by: Optional[str] = None,
+        verifier_id: Optional[str] = None,
+        requires_verification: bool = False,
+        frequency: str = "daily",
+        duration_days: int = 7,
+        session_id: Optional[str] = None,
+        commit: bool = True
+    ) -> Optional[CheckIn]:
+        """
+        Create a canonical relationship task proposal.
+
+        The assigned user and the non-assigned partner both need to accept before
+        a relationship task becomes active. ``verifier_id`` is therefore used for
+        the partner's agreement even when completion verification is not required.
+        """
+        try:
+            group_uuid = uuid.UUID(str(group_id))
+            assigned_uuid = uuid.UUID(str(assigned_to))
+            verifier_uuid = uuid.UUID(str(verifier_id)) if verifier_id else None
+            proposer_uuid = uuid.UUID(str(proposed_by)) if proposed_by else None
+            source_session_uuid = uuid.UUID(str(session_id)) if session_id else None
+        except (TypeError, ValueError):
+            logger.warning(
+                "Skipping task proposal with invalid ids: "
+                f"group={group_id}, assigned_to={assigned_to}, verifier={verifier_id}"
+            )
+            return None
+
+        clean_title = self._clean_task_title(title)
+        if not clean_title:
+            logger.warning("Skipping task proposal without a title")
+            return None
+
+        existing = self._find_duplicate_task(
+            group_uuid,
+            assigned_uuid,
+            clean_title,
+            source_session_uuid
+        )
+        if existing:
+            logger.info(f"Skipping duplicate task proposal {existing.id}: {clean_title}")
+            return None
+
+        normalized_frequency = self._normalize_frequency(frequency)
+        normalized_duration = self._normalize_duration_days(duration_days)
+        assigned_approved = proposer_uuid == assigned_uuid
+        verifier_approved = True if verifier_uuid is None else proposer_uuid == verifier_uuid
+
+        checkin = CheckIn(
+            id=uuid.uuid4(),
+            group_id=group_uuid,
+            assigned_to=assigned_uuid,
+            verifier_id=verifier_uuid,
+            title=clean_title,
+            description=(description or "").strip() or None,
+            status='proposed',
+            assigned_approved=assigned_approved,
+            verifier_approved=verifier_approved,
+            requires_verification=bool(requires_verification and verifier_uuid),
+            frequency=normalized_frequency,
+            progress={'completed': 0, 'total': normalized_duration},
+            next_check_date=date.today() + timedelta(days=1),
+            created_from_session=source_session_uuid,
+            created_at=datetime.utcnow()
+        )
+
+        if self._is_fully_approved(checkin):
+            checkin.status = 'active'
+
+        self.db.add(checkin)
+        if commit:
+            self.db.commit()
+            self.db.refresh(checkin)
+        return checkin
 
     def _resolve_user_reference(
         self,
@@ -150,7 +232,7 @@ class CheckInService:
         else:
             raise ValueError("Role must be 'assigned' or 'verifier'")
 
-        # Activate if both approved
+        # Activate if all required people have accepted.
         was_proposed = checkin.status == 'proposed'
         if self._is_fully_approved(checkin):
             checkin.status = 'active'
@@ -166,6 +248,7 @@ class CheckInService:
                 )
 
         checkin.updated_at = datetime.utcnow()
+        self._conclude_source_session_if_actions_resolved(checkin)
         self.db.commit()
 
         return {
@@ -200,14 +283,14 @@ class CheckInService:
             raise ValueError("Check-in is not currently active")
 
         # Increment completed count
-        progress = checkin.progress or {'completed': 0, 'total': 7}
+        progress = dict(checkin.progress or {'completed': 0, 'total': 7})
         progress['completed'] = min(
             int(progress.get('completed', 0)) + 1,
             int(progress.get('total', 7))
         )
         checkin.progress = progress
 
-        history = checkin.completion_history or []
+        history = list(checkin.completion_history or [])
         history.append({
             'date': date.today().isoformat(),
             'completed': True
@@ -215,7 +298,7 @@ class CheckInService:
         checkin.completion_history = history
 
         # Update status based on verification requirement
-        if checkin.requires_verification:
+        if checkin.requires_verification and checkin.verifier_id:
             checkin.status = 'awaiting_verification'
 
             # Notify verifier that check-in needs verification
@@ -312,7 +395,7 @@ class CheckInService:
             checkin.status = 'needs_work'
             checkin.verification_feedback = feedback or "Please try again"
             # Decrement progress since it wasn't verified
-            progress = checkin.progress
+            progress = dict(checkin.progress or {})
             if progress and progress.get('completed', 0) > 0:
                 progress['completed'] -= 1
                 checkin.progress = progress
@@ -399,7 +482,11 @@ class CheckInService:
         reason: Optional[str] = None
     ) -> Dict:
         """
-        Assignee-only decision flow for proposed tasks.
+        Mutual decision flow for proposed relationship tasks.
+
+        Assignees accept the work they are taking on. The partner/verifier
+        accepts that this is an agreed relationship task. The task only becomes
+        active after all required approvals are present.
         """
         checkin = self.db.query(CheckIn).filter(
             CheckIn.id == uuid.UUID(checkin_id)
@@ -408,8 +495,14 @@ class CheckInService:
         if not checkin:
             raise ValueError(f"Task {checkin_id} not found")
 
-        if str(checkin.assigned_to) != user_id:
-            raise ValueError("Only the assignee can accept/reject this task")
+        actor_role = None
+        if str(checkin.assigned_to) == user_id:
+            actor_role = "assigned"
+        elif checkin.verifier_id and str(checkin.verifier_id) == user_id:
+            actor_role = "verifier"
+
+        if actor_role is None:
+            raise ValueError("Only task participants can accept/reject this task")
 
         if checkin.status != 'proposed':
             raise ValueError("Task is no longer awaiting decision")
@@ -419,22 +512,33 @@ class CheckInService:
             raise ValueError("Decision must be 'accepted' or 'rejected'")
 
         if decision_normalized == 'accepted':
-            checkin.assigned_approved = True
-            checkin.verifier_approved = True
-            checkin.status = 'active'
-            message = "Task accepted and activated"
+            if actor_role == "assigned":
+                checkin.assigned_approved = True
+            else:
+                checkin.verifier_approved = True
+
+            if self._is_fully_approved(checkin):
+                checkin.status = 'active'
+                message = "Task accepted and activated"
+            else:
+                message = "Task accepted; waiting for partner"
         else:
             checkin.status = 'rejected'
-            checkin.verification_feedback = reason or "Rejected by assignee"
+            checkin.verification_feedback = reason or f"Rejected by {actor_role}"
             message = "Task rejected"
 
         checkin.updated_at = datetime.utcnow()
+        self._conclude_source_session_if_actions_resolved(checkin)
         self.db.commit()
         self.db.refresh(checkin)
 
         return {
             'task_id': str(checkin.id),
             'status': checkin.status,
+            'assigned_approved': checkin.assigned_approved,
+            'verifier_approved': checkin.verifier_approved,
+            'requires_verification': checkin.requires_verification,
+            'decided_by_role': actor_role,
             'message': message
         }
 
@@ -443,7 +547,109 @@ class CheckInService:
         if not checkin.assigned_approved:
             return False
 
-        if checkin.requires_verification and not checkin.verifier_approved:
+        if checkin.verifier_id and not checkin.verifier_approved:
             return False
 
         return True
+
+    def _conclude_source_session_if_actions_resolved(self, checkin: CheckIn) -> None:
+        """Conclude a pending-actions session once no proposed tasks remain."""
+        if not checkin.created_from_session:
+            return
+
+        session = self.db.query(SessionModel).filter(
+            SessionModel.id == checkin.created_from_session
+        ).first()
+        if not session or session.status != 'pending_actions':
+            return
+
+        proposed_count = self.db.query(CheckIn).filter(
+            CheckIn.created_from_session == checkin.created_from_session,
+            CheckIn.status == 'proposed'
+        ).count()
+        if proposed_count == 0:
+            session.status = 'concluded'
+
+    @staticmethod
+    def _other_participant_id(participant_ids: List[str], user_id: str) -> Optional[str]:
+        for participant_id in participant_ids:
+            if str(participant_id) != str(user_id):
+                return str(participant_id)
+        return None
+
+    @staticmethod
+    def _clean_task_title(title: Optional[str]) -> str:
+        clean = re.sub(r"\s+", " ", str(title or "").strip())
+        if clean.lower().startswith("task:"):
+            clean = clean[5:].strip()
+        return clean[:120].rstrip()
+
+    @staticmethod
+    def _normalize_task_key(title: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+    @classmethod
+    def _task_title_tokens(cls, title: str) -> set[str]:
+        stop_words = {
+            "a", "an", "the", "to", "by", "for", "and", "or", "of", "with",
+            "will", "task", "short", "one", "another"
+        }
+        return {
+            token
+            for token in cls._normalize_task_key(title).split()
+            if token and token not in stop_words
+        }
+
+    @classmethod
+    def _task_titles_match(cls, left: str, right: str) -> bool:
+        left_key = cls._normalize_task_key(left)
+        right_key = cls._normalize_task_key(right)
+        if left_key == right_key:
+            return True
+
+        left_tokens = cls._task_title_tokens(left)
+        right_tokens = cls._task_title_tokens(right)
+        if len(left_tokens) < 3 or len(right_tokens) < 3:
+            return False
+
+        overlap = len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+        return overlap >= 0.75
+
+    @staticmethod
+    def _normalize_frequency(frequency: Optional[str]) -> str:
+        value = (frequency or "daily").strip().lower().replace("-", "_")
+        if value in {"weekly", "week"}:
+            return "weekly"
+        if value in {"one_time", "one time", "once", "none"}:
+            return "one_time"
+        return "daily"
+
+    @staticmethod
+    def _normalize_duration_days(duration_days) -> int:
+        try:
+            return max(1, min(90, int(duration_days)))
+        except (TypeError, ValueError):
+            return 7
+
+    def _find_duplicate_task(
+        self,
+        group_id: uuid.UUID,
+        assigned_to: uuid.UUID,
+        title: str,
+        source_session_id: Optional[uuid.UUID] = None
+    ) -> Optional[CheckIn]:
+        if not self._normalize_task_key(title):
+            return None
+
+        candidates = self.db.query(CheckIn).filter(
+            CheckIn.group_id == group_id,
+            CheckIn.assigned_to == assigned_to
+        ).all()
+        for candidate in candidates:
+            if not self._task_titles_match(candidate.title, title):
+                continue
+            if candidate.status in {'proposed', 'active', 'awaiting_verification', 'needs_work'}:
+                return candidate
+            if source_session_id and candidate.created_from_session == source_session_id:
+                return candidate
+        return None

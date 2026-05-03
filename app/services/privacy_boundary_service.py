@@ -10,7 +10,54 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Mapping, Sequence
+
+STOPWORDS = {
+    "about", "above", "after", "again", "against", "being", "between",
+    "been", "before", "both", "could", "doing", "each", "else", "even",
+    "first", "from", "have",
+    "having", "here", "into", "just", "more", "most", "need", "needs",
+    "full", "move", "moving", "only", "other", "over", "past", "right", "said", "same", "some",
+    "than", "that", "their", "them", "then", "there", "these", "they",
+    "this", "those", "through", "today", "toward", "under", "very",
+    "want", "wants", "were", "what", "when", "where", "which", "while",
+    "with", "would", "your", "partner", "partners", "relationship", "couple",
+    "user", "users", "person", "people", "thing", "things", "time", "weeks",
+}
+
+SAFE_PROCESS_TERMS = {
+    "accountability", "avoidance", "balance", "boundaries", "boundary",
+    "care", "carrying", "clarity", "communication", "conflict", "connection",
+    "conversation", "defensiveness", "details", "distance", "emotional",
+    "emotion", "emotions", "experience", "experiencing", "feel", "feeling",
+    "feelings", "felt", "guilt", "guilty", "fear", "fears", "help",
+    "helpful", "helping", "honesty",
+    "intimacy", "openness", "pace", "pacing", "pattern", "patterns",
+    "ready", "readiness", "repair", "safety", "scared", "secure", "security",
+    "share", "shared", "sharing", "support", "tension", "transparency", "trust", "uncertain",
+    "uncertainty", "understand", "understanding", "values", "vulnerable",
+    "vulnerability", "willing", "work", "working",
+}
+
+SHORT_SOURCE_SPECIFIC_TERMS = {"sex", "std", "sti", "hiv", "ivf", "gay"}
+
+SAFE_GUIDANCE_TOPICS = {
+    "accountability_capacity",
+    "boundaries_and_pacing",
+    "communication_readiness",
+    "conflict_pacing",
+    "emotional_safety",
+    "repair_readiness",
+    "support_needs",
+    "trust_repair",
+}
+
+GENERIC_AVOID_TERMS = [
+    "private-only specifics",
+    "source details",
+    "private-source references",
+    "unintroduced sensitive topics",
+]
 
 
 INFIDELITY_PATTERNS = [
@@ -40,17 +87,70 @@ HIGH_RISK_PRIVATE_PATTERNS = [
     r"\bself[- ]?harm\b",
 ]
 
-JOINT_RESPONSE_FORBIDDEN_PATTERNS = [
-    *HIGH_RISK_PRIVATE_PATTERNS,
-    r"\byou told me\b",
+PRIVACY_SOURCE_CLAIM_PATTERNS = [
+    r"\bprivate session\b",
+    r"\bprivate conversation(?:s)?\b",
+    r"\bprivate chat(?:s)?\b",
+    r"\bprivate material\b",
+    r"\bprivate context\b",
+    r"\bprivate disclosure\b",
+    r"\btold me privately\b",
+    r"\bprivately\b",
     r"\bin private\b",
+    r"\bfrom private\b",
+    r"\boutside this room\b",
+    r"\boutside the room\b",
+    r"\boutside this conversation\b",
+    r"\boutside our time\b",
+    r"\banywhere else\b",
+    r"\bother conversation(?:s)?\b",
+    r"\bwhat I might know\b",
+    r"\bwhat I know\b",
+    r"\bwhat .* hasn't shared with me\b",
+    r"\bwhat .* has not shared with me\b",
+    r"\bhasn't shared with me\b",
+    r"\bhas not shared with me\b",
+    r"\bhaven't shared with me\b",
+    r"\bhave not shared with me\b",
+    r"\bwhat .* hasn't said to me\b",
+    r"\bwhat .* has not said to me\b",
+    r"\bhasn't said to me\b",
+    r"\bhas not said to me\b",
+    r"\bhaven't said to me\b",
+    r"\bhave not said to me\b",
+    r"\bconfirm or deny\b",
+    r"\bfrom elsewhere\b",
     r"\bI know something\b",
     r"\bI can't say\b",
     r"\bI cannot say\b",
+    r"\bI can't share\b",
+    r"\bI cannot share\b",
     r"\bundisclosed fact\b",
     r"\bhidden fact\b",
     r"\bsomething you haven't shared\b",
     r"\bsomething you are not saying\b",
+    r"\byou told me\b",
+]
+
+CONVERSATION_OPENED_TOPIC_PATTERNS = {
+    "infidelity": INFIDELITY_PATTERNS,
+    "privacy_boundary": [
+        r"\bsecret(?:s)?\b",
+        r"\bdon't tell\b",
+        r"\bdo not tell\b",
+        r"\bconfidential\b",
+    ],
+    "trauma_or_safety": [
+        r"\btrauma\b",
+        r"\babuse\b",
+        r"\bassault\b",
+        r"\bself[- ]?harm\b",
+    ],
+}
+
+JOINT_RESPONSE_FORBIDDEN_PATTERNS = [
+    *HIGH_RISK_PRIVATE_PATTERNS,
+    *PRIVACY_SOURCE_CLAIM_PATTERNS,
 ]
 
 SENSITIVE_TOPIC_LABELS = {
@@ -93,6 +193,19 @@ class PrivacyBoundaryService:
         return texts
 
     @staticmethod
+    def _context_subject_id(context: Dict | str) -> str | None:
+        if not isinstance(context, dict):
+            return None
+        data = context.get("data") if isinstance(context.get("data"), dict) else context
+        subject_id = (
+            context.get("subject_user_id")
+            or context.get("user_id")
+            or (data or {}).get("subject_user_id")
+            or (data or {}).get("user_id")
+        )
+        return str(subject_id) if subject_id else None
+
+    @staticmethod
     def detect_sensitive_topics(texts: Iterable[str]) -> List[str]:
         joined = "\n".join(texts or [])
         topics: List[str] = []
@@ -102,27 +215,161 @@ class PrivacyBoundaryService:
         return topics
 
     @staticmethod
-    def contains_forbidden_joint_language(text: str) -> List[str]:
+    def _words(text: str) -> List[str]:
+        return re.findall(r"[a-zA-Z]+", text.lower())
+
+    @staticmethod
+    def _is_source_specific_word(word: str) -> bool:
+        if word in SHORT_SOURCE_SPECIFIC_TERMS:
+            return True
+        if len(word) < 4:
+            return False
+        if word in STOPWORDS or word in SAFE_PROCESS_TERMS:
+            return False
+        return True
+
+    @classmethod
+    def source_specific_matches(
+        cls,
+        text: str,
+        source_contexts: Sequence[Dict] | Sequence[str] | None,
+        joint_conversation_text: str | None = None,
+        joint_conversation_by_user: Mapping[str, str] | None = None,
+        public_terms: Iterable[str] | None = None,
+    ) -> List[str]:
+        """
+        Find concrete words/phrases from private-only source context repeated in
+        joint-facing text before the partners have introduced them.
+
+        This is deliberately heuristic. It is a generic backstop for arbitrary
+        private content; the primary safety mechanism is still keeping raw
+        private memory out of joint prompts.
+        """
+        if not text or not source_contexts:
+            return []
+
+        response_text = text.lower()
+        public_term_set = {term.lower() for term in (public_terms or [])}
+        source_terms = set()
+        source_phrases = set()
+        matches: List[str] = []
+
+        for source_context in source_contexts:
+            if isinstance(source_context, str):
+                source_text = source_context
+                opened_text = joint_conversation_text or ""
+            else:
+                data = source_context.get("data") if isinstance(source_context.get("data"), dict) else source_context
+                source_text = str((data or {}).get("text") or (data or {}).get("guidance") or "")
+                subject_id = cls._context_subject_id(source_context)
+                opened_text = (
+                    (joint_conversation_by_user or {}).get(subject_id or "")
+                    if subject_id and joint_conversation_by_user is not None
+                    else joint_conversation_text
+                ) or ""
+
+            opened_text = opened_text.lower()
+            source_terms.clear()
+            source_phrases.clear()
+            words = cls._words(source_text)
+            specific_flags = [cls._is_source_specific_word(word) for word in words]
+            for word, is_specific in zip(words, specific_flags):
+                if is_specific and word not in public_term_set:
+                    source_terms.add(word)
+
+            for size in (2, 3):
+                for idx in range(0, max(0, len(words) - size + 1)):
+                    phrase_words = words[idx:idx + size]
+                    phrase_flags = specific_flags[idx:idx + size]
+                    if not any(phrase_flags):
+                        continue
+                    if all(word in STOPWORDS for word in phrase_words):
+                        continue
+                    source_phrases.add(" ".join(phrase_words))
+
+            for term in sorted(source_terms):
+                pattern = rf"\b{re.escape(term)}\b"
+                if re.search(pattern, response_text) and not re.search(pattern, opened_text):
+                    matches.append(term)
+
+            for phrase in sorted(source_phrases):
+                pattern = rf"\b{re.escape(phrase)}\b"
+                if re.search(pattern, response_text) and not re.search(pattern, opened_text):
+                    matches.append(phrase)
+
+        return matches[:10]
+
+    @classmethod
+    def _topic_opened_by_source_subject(
+        cls,
+        topic_patterns: Sequence[str],
+        source_contexts: Sequence[Dict] | Sequence[str] | None,
+        joint_conversation_text: str | None,
+        joint_conversation_by_user: Mapping[str, str] | None,
+    ) -> bool:
+        if not source_contexts or joint_conversation_by_user is None:
+            return any(
+                re.search(pattern, joint_conversation_text or "", flags=re.IGNORECASE)
+                for pattern in topic_patterns
+            )
+
+        for source_context in source_contexts:
+            if isinstance(source_context, str):
+                opened_text = joint_conversation_text or ""
+            else:
+                subject_id = cls._context_subject_id(source_context)
+                opened_text = (joint_conversation_by_user or {}).get(subject_id or "", "")
+
+            if any(re.search(pattern, opened_text, flags=re.IGNORECASE) for pattern in topic_patterns):
+                return True
+        return False
+
+    @staticmethod
+    def contains_forbidden_joint_language(
+        text: str,
+        joint_conversation_text: str | None = None
+    ) -> List[str]:
         matches = []
-        for pattern in JOINT_RESPONSE_FORBIDDEN_PATTERNS:
+        for pattern in PRIVACY_SOURCE_CLAIM_PATTERNS:
             if re.search(pattern, text or "", flags=re.IGNORECASE):
                 matches.append(pattern)
+
+        for _, patterns in CONVERSATION_OPENED_TOPIC_PATTERNS.items():
+            topic_was_opened = any(
+                re.search(pattern, joint_conversation_text or "", flags=re.IGNORECASE)
+                for pattern in patterns
+            )
+            if topic_was_opened:
+                continue
+
+            for pattern in patterns:
+                if re.search(pattern, text or "", flags=re.IGNORECASE):
+                    matches.append(pattern)
+
         return matches
 
     @classmethod
     def validate_joint_response(
         cls,
         response_text: str,
-        private_contexts: Sequence[Dict] | Sequence[str] | None = None
+        private_contexts: Sequence[Dict] | Sequence[str] | None = None,
+        joint_conversation_text: str | None = None,
+        joint_conversation_by_user: Mapping[str, str] | None = None,
+        public_terms: Iterable[str] | None = None,
     ) -> PrivacyValidationResult:
         """
         Validate that a joint-session response does not reveal private material.
 
         This intentionally uses conservative lexical checks. It is a runtime
-        backstop, not the only privacy mechanism.
+        backstop, not the only privacy mechanism. Sensitive topic words are
+        allowed only after the partners have already introduced that topic in
+        the live joint conversation; source claims remain forbidden.
         """
         reasons = []
-        forbidden_matches = cls.contains_forbidden_joint_language(response_text or "")
+        forbidden_matches = cls.contains_forbidden_joint_language(
+            response_text or "",
+            joint_conversation_text=joint_conversation_text,
+        )
         if forbidden_matches:
             reasons.append("response_contains_forbidden_private_language")
 
@@ -133,10 +380,38 @@ class PrivacyBoundaryService:
             context_texts = cls.context_texts(private_contexts or [])  # type: ignore[arg-type]
 
         if "infidelity" in cls.detect_sensitive_topics(context_texts):
-            if any(re.search(pattern, response_text or "", flags=re.IGNORECASE) for pattern in INFIDELITY_PATTERNS):
+            infidelity_opened = cls._topic_opened_by_source_subject(
+                INFIDELITY_PATTERNS,
+                private_contexts,
+                joint_conversation_text,
+                joint_conversation_by_user,
+            )
+            if not infidelity_opened and any(re.search(pattern, response_text or "", flags=re.IGNORECASE) for pattern in INFIDELITY_PATTERNS):
                 reasons.append("response_mentions_private_infidelity")
 
+        if cls.source_specific_matches(
+            response_text or "",
+            private_contexts,
+            joint_conversation_text=joint_conversation_text,
+            joint_conversation_by_user=joint_conversation_by_user,
+            public_terms=public_terms,
+        ):
+            reasons.append("response_mentions_private_source_specifics")
+
         return PrivacyValidationResult(ok=not reasons, reasons=reasons)
+
+    @classmethod
+    def _broad_guidance_topics(cls, source_texts: Iterable[str]) -> List[str]:
+        joined = "\n".join(source_texts or "").lower()
+        topics = {"emotional_safety", "communication_readiness", "boundaries_and_pacing"}
+        if any(term in joined for term in ["trust", "honest", "repair", "guilt", "accountability", "cheat", "affair", "infidel"]):
+            topics.add("trust_repair")
+            topics.add("accountability_capacity")
+        if any(term in joined for term in ["conflict", "argue", "fight", "explode", "anger"]):
+            topics.add("conflict_pacing")
+        if any(term in joined for term in ["support", "alone", "overwhelm", "scared", "fear"]):
+            topics.add("support_needs")
+        return sorted(topics)
 
     @classmethod
     def build_fallback_joint_guidance(cls, contexts: Sequence[Dict]) -> Dict:
@@ -148,6 +423,7 @@ class PrivacyBoundaryService:
         """
         texts = cls.context_texts(contexts)
         topics = cls.detect_sensitive_topics(texts)
+        broad_topics = cls._broad_guidance_topics(texts)
 
         guidance_parts = [
             "One partner may be carrying unresolved guilt, fear, or avoidance around honesty and repair.",
@@ -164,15 +440,8 @@ class PrivacyBoundaryService:
 
         return {
             "guidance": " ".join(guidance_parts),
-            "topics": topics,
-            "avoid_terms": [
-                "cheating",
-                "affair",
-                "infidelity",
-                "secret",
-                "private session",
-                "told me privately",
-            ],
+            "topics": broad_topics,
+            "avoid_terms": GENERIC_AVOID_TERMS,
             "sensitivity_level": 10 if topics else 7,
             "source": "fallback_privacy_guard",
         }
@@ -193,17 +462,17 @@ class PrivacyBoundaryService:
         if cls.contains_forbidden_joint_language(guidance_text):
             return cls.build_fallback_joint_guidance(source_contexts)
 
-        source_topics = cls.detect_sensitive_topics(cls.context_texts(source_contexts))
+        if cls.source_specific_matches(guidance_text, source_contexts):
+            return cls.build_fallback_joint_guidance(source_contexts)
+
+        source_texts = cls.context_texts(source_contexts)
+        source_topics = cls.detect_sensitive_topics(source_texts)
         payload = dict(guidance_payload)
-        payload["topics"] = sorted(set(payload.get("topics") or []) | set(source_topics))
-        payload.setdefault("avoid_terms", [
-            "cheating",
-            "affair",
-            "infidelity",
-            "secret",
-            "private session",
-            "told me privately",
-        ])
+        payload["topics"] = [
+            topic for topic in cls._broad_guidance_topics(source_texts)
+            if topic in SAFE_GUIDANCE_TOPICS
+        ]
+        payload["avoid_terms"] = GENERIC_AVOID_TERMS
         payload.setdefault("sensitivity_level", 10 if source_topics else 7)
         payload.setdefault("source", "model_redacted")
         return payload

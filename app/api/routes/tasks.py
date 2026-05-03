@@ -1,8 +1,4 @@
-"""
-Task API Routes
-
-POC task endpoints backed by check-ins.
-"""
+"""Task API routes backed by check-ins."""
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -66,7 +62,7 @@ async def complete_task_checkin(
     db: Session = Depends(get_db)
 ):
     if task_id != checkin_id:
-        raise HTTPException(status_code=400, detail="POC model uses one checkin per task; IDs must match")
+        raise HTTPException(status_code=400, detail="Task completion uses the backing check-in id; IDs must match")
 
     service = CheckInService(db)
     try:
