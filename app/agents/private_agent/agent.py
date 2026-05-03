@@ -95,7 +95,7 @@ Recent conversation history:
 
 User: {user_input}
 
-Provide a warm, empathetic response as their therapist:"""
+Reply as their therapist in a concise spoken turn. Use 2-5 short sentences, at most one simple question, and no markdown formatting unless the user explicitly asks for a plan:"""
 
         # Record start time for latency tracking
         start_time = time.time()
@@ -104,7 +104,7 @@ Provide a warm, empathetic response as their therapist:"""
             # Call Anthropic API
             response = self.client.messages.create(
                 model=settings.LLM_MODEL,
-                max_tokens=settings.MAX_TOKENS,
+                max_tokens=min(settings.MAX_TOKENS, 420),
                 temperature=settings.LLM_TEMPERATURE,
                 system=PRIVATE_AGENT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}]
@@ -168,7 +168,7 @@ Recent conversation history:
 
 User: {user_input}
 
-Provide a warm, empathetic response as their therapist:"""
+Reply as their therapist in a concise spoken turn. Use 2-5 short sentences, at most one simple question, and no markdown formatting unless the user explicitly asks for a plan:"""
 
         start_time = time.time()
         total_tokens = 0
@@ -177,7 +177,7 @@ Provide a warm, empathetic response as their therapist:"""
             # Use streaming API
             with self.client.messages.stream(
                 model=settings.LLM_MODEL,
-                max_tokens=settings.MAX_TOKENS,
+                max_tokens=min(settings.MAX_TOKENS, 420),
                 temperature=settings.LLM_TEMPERATURE,
                 system=PRIVATE_AGENT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}]

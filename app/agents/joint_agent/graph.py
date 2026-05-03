@@ -242,11 +242,7 @@ Recent conversation:
 
 {state['sender_name']}: {state['user_input']}
 
-As the couples therapist, provide a balanced, therapeutic response that:
-1. Acknowledges both partners' perspectives
-2. Explores underlying patterns or emotions
-3. Encourages healthy communication
-4. Maintains neutrality and compassion
+As the couples therapist, reply in a concise spoken turn. Acknowledge the live concern, name one pattern or emotion if useful, offer one concrete next move, and ask at most one simple question. Keep it 60-120 words. Do not use markdown formatting or long bullet lists unless the partners explicitly ask for a plan.
 
 Your response:"""
 
@@ -254,7 +250,7 @@ Your response:"""
             start_time = time.time()
             response = client.messages.create(
                 model=settings.LLM_MODEL,
-                max_tokens=settings.MAX_TOKENS,
+                max_tokens=min(settings.MAX_TOKENS, 420),
                 temperature=settings.LLM_TEMPERATURE,
                 system=JOINT_AGENT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}]
