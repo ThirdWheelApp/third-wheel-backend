@@ -87,6 +87,9 @@ async def create_group(
         partner1_id=current_user_uuid,
         partner2_id=partner_uuid,
         partner2_email=normalize_email(partner.email),
+        relationship_type=group_data.relationship_type,
+        relationship_description=group_data.relationship_description,
+        is_long_distance=group_data.is_long_distance,
         status="active"
     )
 

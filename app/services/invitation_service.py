@@ -19,11 +19,39 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _apply_relationship_details(
+    group: Group,
+    *,
+    relationship_type: Optional[str] = None,
+    relationship_description: Optional[str] = None,
+    is_long_distance: Optional[bool] = None,
+) -> None:
+    normalized_type = _normalize_optional_text(relationship_type)
+    normalized_description = _normalize_optional_text(relationship_description)
+
+    if normalized_type is not None:
+        group.relationship_type = normalized_type
+    if normalized_description is not None:
+        group.relationship_description = normalized_description
+    if is_long_distance is not None:
+        group.is_long_distance = is_long_distance
+
+
 def create_or_reuse_pending_relationship(
     db: Session,
     *,
     inviter: User,
     invited_email: str,
+    relationship_type: Optional[str] = None,
+    relationship_description: Optional[str] = None,
+    is_long_distance: Optional[bool] = None,
 ) -> Group:
     """
     Create or reuse a relationship shell for a partner invite.
@@ -46,6 +74,12 @@ def create_or_reuse_pending_relationship(
             )
         ).first()
         if existing_active:
+            _apply_relationship_details(
+                existing_active,
+                relationship_type=relationship_type,
+                relationship_description=relationship_description,
+                is_long_distance=is_long_distance,
+            )
             return existing_active
 
     pending_group = db.query(Group).filter(
@@ -55,6 +89,12 @@ def create_or_reuse_pending_relationship(
     ).first()
 
     if pending_group:
+        _apply_relationship_details(
+            pending_group,
+            relationship_type=relationship_type,
+            relationship_description=relationship_description,
+            is_long_distance=is_long_distance,
+        )
         return pending_group
 
     group = Group(
@@ -63,6 +103,9 @@ def create_or_reuse_pending_relationship(
         partner2_id=None,
         partner2_email=normalized_email,
         invite_token=uuid.uuid4().hex,
+        relationship_type=_normalize_optional_text(relationship_type),
+        relationship_description=_normalize_optional_text(relationship_description),
+        is_long_distance=is_long_distance,
         status="pending",
     )
     db.add(group)

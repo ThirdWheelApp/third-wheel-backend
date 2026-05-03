@@ -78,6 +78,9 @@ class Group(Base):
     )
     partner2_email = Column(String(255), nullable=True, index=True)
     invite_token = Column(String(64), nullable=True, unique=True, index=True)
+    relationship_type = Column(String(100), nullable=True)
+    relationship_description = Column(Text, nullable=True)
+    is_long_distance = Column(Boolean, nullable=True)
     status = Column(String(50), default="active", nullable=False)  # 'pending', 'active', 'inactive'
 
     created_at = Column(DateTime, default=func.now(), nullable=False)

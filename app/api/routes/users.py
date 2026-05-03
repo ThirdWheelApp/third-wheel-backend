@@ -38,6 +38,8 @@ def _build_canonical_invite_redirect(
     inviter_name: str,
     inviter_id: str,
     group_id: Optional[str] = None,
+    relationship_type: Optional[str] = None,
+    is_long_distance: Optional[bool] = None,
 ) -> str:
     """
     Normalize invite redirects so invitees always land in onboarding with prefilled context.
@@ -54,6 +56,10 @@ def _build_canonical_invite_redirect(
         invite_params["groupId"] = group_id
     if inviter_email:
         invite_params["partnerEmail"] = inviter_email.lower()
+    if relationship_type:
+        invite_params["relationshipType"] = relationship_type
+    if is_long_distance is not None:
+        invite_params["isLongDistance"] = "true" if is_long_distance else "false"
 
     parsed = urlparse(base_redirect)
 
@@ -248,6 +254,9 @@ async def invite_partner(
         db,
         inviter=inviter,
         invited_email=str(invite_data.partner_email),
+        relationship_type=invite_data.relationship_type,
+        relationship_description=invite_data.relationship_description,
+        is_long_distance=invite_data.is_long_distance,
     )
     db.commit()
     db.refresh(group)
@@ -277,6 +286,8 @@ async def invite_partner(
             inviter_name=inviter_name,
             inviter_id=inviter_id,
             group_id=str(group.id),
+            relationship_type=group.relationship_type,
+            is_long_distance=group.is_long_distance,
         )
 
         if settings.INVITE_EMAIL_DELIVERY_ENABLED:
@@ -297,6 +308,9 @@ async def invite_partner(
                     "inviter_name": inviter_name,
                     "inviter_email": inviter_email,
                     "group_id": str(group.id),
+                    "relationship_type": group.relationship_type,
+                    "relationship_description": group.relationship_description,
+                    "is_long_distance": group.is_long_distance,
                     "needs_onboarding": True,
                 }
             )

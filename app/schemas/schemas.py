@@ -57,6 +57,9 @@ class InvitePartnerRequest(BaseModel):
     partner_email: EmailStr = Field(..., alias="partnerEmail")
     inviter_name: str = Field(..., alias="inviterName")
     inviter_email: Optional[EmailStr] = Field(None, alias="inviterEmail")
+    relationship_type: Optional[str] = Field(None, alias="relationshipType")
+    relationship_description: Optional[str] = Field(None, alias="relationshipDescription")
+    is_long_distance: Optional[bool] = Field(None, alias="isLongDistance")
     # Optional: User ID for unauthenticated calls during onboarding
     # When provided without auth, this is used as the inviter ID
     inviter_user_id: Optional[str] = Field(None, alias="inviterUserId")
@@ -82,6 +85,9 @@ class InvitePartnerResponse(CamelCaseModel):
 class GroupCreate(BaseModel):
     """Schema for creating a relationship group."""
     partner_id: str = Field(..., alias="partnerId")
+    relationship_type: Optional[str] = Field(None, alias="relationshipType")
+    relationship_description: Optional[str] = Field(None, alias="relationshipDescription")
+    is_long_distance: Optional[bool] = Field(None, alias="isLongDistance")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -105,6 +111,9 @@ class GroupResponse(CamelCaseModel):
     partner1_id: UUID
     partner2_id: Optional[UUID] = None
     partner2_email: Optional[str] = None
+    relationship_type: Optional[str] = None
+    relationship_description: Optional[str] = None
+    is_long_distance: Optional[bool] = None
     status: str
     created_at: datetime
 

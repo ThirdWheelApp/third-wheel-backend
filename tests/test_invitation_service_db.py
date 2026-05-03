@@ -49,6 +49,9 @@ def test_pending_invite_acceptance_preserves_private_session_group(db_session):
         db_session,
         inviter=inviter,
         invited_email="jordan@example.com",
+        relationship_type="Married",
+        relationship_description="Working on trust and communication.",
+        is_long_distance=False,
     )
     db_session.commit()
     db_session.refresh(pending_group)
@@ -57,6 +60,9 @@ def test_pending_invite_acceptance_preserves_private_session_group(db_session):
     assert pending_group.partner1_id == inviter.id
     assert pending_group.partner2_id is None
     assert pending_group.partner2_email == "jordan@example.com"
+    assert pending_group.relationship_type == "Married"
+    assert pending_group.relationship_description == "Working on trust and communication."
+    assert pending_group.is_long_distance is False
 
     private_session = Session(
         id=uuid.uuid4(),
@@ -133,6 +139,9 @@ def test_no_email_invite_flow_through_api(db_session):
                 "inviterName": "Alex API",
                 "inviterEmail": "alex-api@example.com",
                 "inviterUserId": str(inviter_id),
+                "relationshipType": "Engaged",
+                "relationshipDescription": "We want help with conflict repair.",
+                "isLongDistance": True,
                 "redirectTo": "http://localhost:8081",
             },
         )
@@ -143,6 +152,8 @@ def test_no_email_invite_flow_through_api(db_session):
         assert "mode=invite" in invite_payload["inviteUrl"]
         assert f"invitedBy={inviter_id}" in invite_payload["inviteUrl"]
         assert f"groupId={invite_payload['groupId']}" in invite_payload["inviteUrl"]
+        assert "relationshipType=Engaged" in invite_payload["inviteUrl"]
+        assert "isLongDistance=true" in invite_payload["inviteUrl"]
 
         app.dependency_overrides[get_current_user] = lambda: str(inviter_id)
         inviter_groups = client.get("/api/groups/my-groups")
@@ -174,6 +185,9 @@ def test_no_email_invite_flow_through_api(db_session):
         assert accepted_group["status"] == "active"
         assert accepted_group["partner1Id"] == str(inviter_id)
         assert accepted_group["partner2Id"] == str(partner_id)
+        assert accepted_group["relationshipType"] == "Engaged"
+        assert accepted_group["relationshipDescription"] == "We want help with conflict repair."
+        assert accepted_group["isLongDistance"] is True
 
         partner_groups = client.get("/api/groups/my-groups")
         assert partner_groups.status_code == 200, partner_groups.text

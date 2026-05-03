@@ -209,6 +209,15 @@ def run_schema_migrations():
                 ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_token VARCHAR(64)
             """))
             conn.execute(text("""
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS relationship_type VARCHAR(100)
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS relationship_description TEXT
+            """))
+            conn.execute(text("""
+                ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_long_distance BOOLEAN
+            """))
+            conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_groups_partner2_email ON groups(partner2_email)
             """))
             conn.execute(text("""
