@@ -10,9 +10,12 @@ from app.db.models import Session as SessionModel, Message, CheckIn
 from app.services.context_service import ContextService
 from app.services.checkin_service import CheckInService
 from app.services.therapist_notes_service import TherapistNotesService
+from app.utils.logger import get_logger
 import uuid
 from datetime import datetime
 from typing import Dict, List
+
+logger = get_logger(__name__)
 
 
 class SessionService:
@@ -116,15 +119,16 @@ class SessionService:
     async def end_session(
         self,
         session_id: str,
-        user_id: str
+        user_id: str,
+        process_post_session: bool = True
     ) -> Dict:
         """
-        Second user confirms ending the session.
+        End the session and optionally run post-session processing.
 
-        Triggers post-session processing:
-        1. Extract context
-        2. Extract check-ins
-        3. Set status to 'pending_actions'
+        Relationship-scoped sessions can need multiple LLM calls to extract
+        memories, redacted joint guidance, and check-ins. Callers that need a
+        fast HTTP response can set process_post_session=False, which records
+        the end immediately and lets a background worker finish processing.
 
         Args:
             session_id: UUID of the session
@@ -144,10 +148,59 @@ class SessionService:
         if requester not in session.participants:
             raise ValueError("Not authorized to end this session")
 
-        # Set to ending status (locked for processing)
+        if session.status in {'concluded', 'pending_actions'}:
+            return {
+                'session_id': str(session.id),
+                'status': session.status,
+                'contexts_extracted': 0,
+                'check_ins_proposed': 0,
+                'post_processing_required': False
+            }
+
+        # Set to ending status (locked for processing).
         session.status = 'ending'
-        session.ended_at = datetime.utcnow()
+        if not session.ended_at:
+            session.ended_at = datetime.utcnow()
         self.db.commit()
+
+        if not process_post_session and session.group_id is not None:
+            return {
+                'session_id': str(session.id),
+                'status': session.status,
+                'contexts_extracted': 0,
+                'check_ins_proposed': 0,
+                'post_processing_required': True
+            }
+
+        return await self.process_ended_session(session_id)
+
+    async def process_ended_session(self, session_id: str) -> Dict:
+        """
+        Run post-session processing for a session already marked as ending.
+
+        This may perform LLM work and should usually run outside the request
+        path. Completion errors are logged and the session remains ended so the
+        user is not trapped in an active session.
+        """
+        session = self.db.query(SessionModel).filter(
+            SessionModel.id == uuid.UUID(session_id)
+        ).first()
+
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        if session.status in {'concluded', 'pending_actions'}:
+            return {
+                'session_id': str(session.id),
+                'status': session.status,
+                'contexts_extracted': 0,
+                'check_ins_proposed': 0,
+                'post_processing_required': False
+            }
+
+        if not session.ended_at:
+            session.ended_at = datetime.utcnow()
+            self.db.commit()
 
         try:
             # Skip context extraction and check-ins for solo private sessions
@@ -172,7 +225,8 @@ class SessionService:
                     'session_id': str(session.id),
                     'status': session.status,
                     'contexts_extracted': 0,
-                    'check_ins_proposed': 0
+                    'check_ins_proposed': 0,
+                    'post_processing_required': False
                 }
 
             # Extract context from session
@@ -214,14 +268,49 @@ class SessionService:
                 'contexts_extracted': len(extracted_data.get('user_a_contexts', [])) +
                                      len(extracted_data.get('user_b_contexts', [])) +
                                      len(extracted_data.get('group_contexts', [])),
-                'check_ins_proposed': len(check_ins)
+                'check_ins_proposed': len(check_ins),
+                'post_processing_required': False
             }
 
         except Exception as e:
-            # Revert to active on error
-            session.status = 'active'
+            logger.error(f"Session end post-processing failed for {session_id}: {e}", exc_info=True)
+            self.db.rollback()
+            session = self.db.query(SessionModel).filter(
+                SessionModel.id == uuid.UUID(session_id)
+            ).first()
+            if not session:
+                raise
+
+            # The user ended the session successfully; do not re-open it just
+            # because extraction failed.
+            session.status = 'concluded'
+            if not session.ended_at:
+                session.ended_at = datetime.utcnow()
             self.db.commit()
-            raise e
+
+            try:
+                self.notes_service.create_summary_note(
+                    session_id=session_id,
+                    scope=session.type,
+                    summary_payload={
+                        "session_id": str(session.id),
+                        "contexts_extracted": 0,
+                        "checkins_proposed": 0,
+                        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                        "post_processing_error": str(e)
+                    }
+                )
+            except Exception:
+                pass
+
+            return {
+                'session_id': str(session.id),
+                'status': session.status,
+                'contexts_extracted': 0,
+                'check_ins_proposed': 0,
+                'post_processing_required': False,
+                'post_processing_error': str(e)
+            }
 
     def conclude_session(self, session_id: str):
         """

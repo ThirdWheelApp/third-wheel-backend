@@ -2,20 +2,48 @@
 Session API Routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.db.database import get_db
+from app.db.database import get_db, SessionLocal
 from app.db.models import Session as SessionModel, Message, Group
 from app.services.session_service import SessionService
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
 from app.utils.logger import get_logger
 from typing import List
+import asyncio
 import uuid
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _http_error_from_value_error(error: ValueError) -> HTTPException:
+    detail = str(error)
+    if "not found" in detail.lower():
+        return HTTPException(status_code=404, detail=detail)
+    if "not authorized" in detail.lower():
+        return HTTPException(status_code=403, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
+def process_session_end_background(session_id: str) -> None:
+    """
+    Finish session extraction outside the HTTP request lifecycle.
+
+    This runs in Starlette's threadpool because it is a sync background task.
+    The service still exposes an async method, so use asyncio.run inside this
+    isolated thread.
+    """
+    db = SessionLocal()
+    try:
+        result = asyncio.run(SessionService(db).process_ended_session(session_id))
+        logger.info(f"Background session end processing completed: {result}")
+    except Exception as e:
+        logger.error(f"Background session end processing failed for {session_id}: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 @router.post("/", response_model=SessionResponse)
@@ -144,6 +172,7 @@ async def request_end_session(
 @router.post("/{session_id}/end")
 async def end_session(
     session_id: str,
+    background_tasks: BackgroundTasks,
     current_user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -154,7 +183,18 @@ async def end_session(
     Requires authentication. User must be a participant in the session.
     """
     service = SessionService(db)
-    result = await service.end_session(session_id, current_user_id)
+    try:
+        result = await service.end_session(
+            session_id,
+            current_user_id,
+            process_post_session=False
+        )
+    except ValueError as e:
+        raise _http_error_from_value_error(e)
+
+    if result.get("post_processing_required"):
+        background_tasks.add_task(process_session_end_background, session_id)
+
     return result
 
 
