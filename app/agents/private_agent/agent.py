@@ -83,11 +83,15 @@ class PrivateAgent:
         """
         # Load all context for this user
         contexts = self.repo.get_all_context(self.user_id, self.group_id)
+        relationship_profile = self.repo.get_relationship_profile_text(self.user_id, self.group_id)
         context_text = format_context_for_llm(contexts)
         history_text = format_messages_for_llm(messages_history[-10:])  # Last 10 messages
 
         # Build prompt
-        prompt = f"""Previous context about this user:
+        prompt = f"""Relationship profile:
+{relationship_profile}
+
+Previous context about this user:
 {context_text}
 
 Recent conversation history:
@@ -156,11 +160,15 @@ Reply as their therapist in a concise spoken turn. Use 2-5 short sentences, at m
         """
         # Load all context for this user
         contexts = self.repo.get_all_context(self.user_id, self.group_id)
+        relationship_profile = self.repo.get_relationship_profile_text(self.user_id, self.group_id)
         context_text = format_context_for_llm(contexts)
         history_text = format_messages_for_llm(messages_history[-10:])
 
         # Build prompt
-        prompt = f"""Previous context about this user:
+        prompt = f"""Relationship profile:
+{relationship_profile}
+
+Previous context about this user:
 {context_text}
 
 Recent conversation history:
@@ -235,9 +243,13 @@ Reply as their therapist in a concise spoken turn. Use 2-5 short sentences, at m
         )
 
         context_text = format_context_for_llm(filtered)
+        relationship_profile = self.repo.get_relationship_profile_text(self.user_id, self.group_id)
 
         # Build prompt with privacy instructions
-        prompt = f"""Available context (privacy-filtered, secret_level <= {share_threshold}):
+        prompt = f"""Relationship profile:
+{relationship_profile}
+
+Available context (privacy-filtered, secret_level <= {share_threshold}):
 {context_text}
 
 Query from joint therapy session: {query}
@@ -318,9 +330,13 @@ Response:"""
         )
 
         context_text = format_context_for_llm(filtered)
+        relationship_profile = self.repo.get_relationship_profile_text(self.user_id, self.group_id)
 
         # Build prompt with privacy instructions
-        prompt = f"""Available context (privacy-filtered, secret_level <= {partner_agent_threshold}):
+        prompt = f"""Relationship profile:
+{relationship_profile}
+
+Available context (privacy-filtered, secret_level <= {partner_agent_threshold}):
 {context_text}
 
 Query from partner's private agent: {query}

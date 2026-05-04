@@ -6,7 +6,7 @@ Loads context from database for a specific user within a relationship.
 """
 
 from sqlalchemy.orm import Session
-from app.db.models import PrivateUserContext, GroupContext
+from app.db.models import PrivateUserContext, GroupContext, Group, User
 from app.config.settings import settings
 from typing import List, Dict, Optional
 import uuid
@@ -127,6 +127,68 @@ class PrivateAgentRepository:
             ctx for ctx in contexts
             if ctx.get('secret_level', 0) <= max_level
         ]
+
+    def get_relationship_profile_text(
+        self,
+        user_id: str,
+        group_id: Optional[str]
+    ) -> str:
+        """
+        Return stable relationship identity facts for prompt continuity.
+
+        Pronouns/gender are not first-class columns yet. Until they are, the
+        prompt must explicitly avoid guessing when the stored relationship
+        profile does not contain that information.
+        """
+        if group_id is None:
+            current_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+            current_user = self.db.query(User).filter(User.id == current_uuid).first()
+            current_name = current_user.name if current_user else "unknown"
+            return (
+                f"Current user: {current_name}\n"
+                "Partner: not connected yet\n"
+                "Partner pronouns/gender: Unknown. Do not infer gendered pronouns; "
+                "use 'your partner' unless the transcript or stored context explicitly states pronouns."
+            )
+
+        current_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        group_uuid = uuid.UUID(group_id) if isinstance(group_id, str) else group_id
+
+        group = self.db.query(Group).filter(Group.id == group_uuid).first()
+        current_user = self.db.query(User).filter(User.id == current_uuid).first()
+
+        partner = None
+        if group:
+            partner_id = None
+            if group.partner1_id == current_uuid:
+                partner_id = group.partner2_id
+            elif group.partner2_id == current_uuid:
+                partner_id = group.partner1_id
+
+            if partner_id:
+                partner = self.db.query(User).filter(User.id == partner_id).first()
+
+        current_name = current_user.name if current_user else "unknown"
+        partner_name = partner.name if partner else "not connected yet"
+        relationship_type = group.relationship_type if group and group.relationship_type else "not specified"
+        relationship_description = (
+            group.relationship_description
+            if group and group.relationship_description
+            else "not specified"
+        )
+
+        return "\n".join([
+            f"Current user: {current_name}",
+            f"Partner: {partner_name}",
+            f"Relationship type: {relationship_type}",
+            f"Relationship description: {relationship_description}",
+            (
+                "Partner pronouns/gender: Unknown unless explicitly stated in the relationship "
+                "description, recent transcript, or stored context. Do not infer gendered pronouns "
+                "from names, relationship type, sexual roles, abuse dynamics, or stereotypes; use "
+                "the partner's name or 'your partner' when unsure."
+            ),
+        ])
 
     def get_recent_context(
         self,

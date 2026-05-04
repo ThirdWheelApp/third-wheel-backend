@@ -53,6 +53,7 @@ class JointAgent:
         self.client = get_llm_client()
 
         # Load group context once
+        self.relationship_profile_text = self.repo.get_relationship_profile_text(group_id)
         group_contexts = self.repo.get_group_context(group_id)
         self.group_context_text = format_context_for_llm(group_contexts)
         joint_guidance_contexts = self.repo.get_joint_guidance_context(group_id)
@@ -114,6 +115,7 @@ class JointAgent:
             group_id=self.group_id,
             private_agent_a=self.private_agent_a,
             private_agent_b=self.private_agent_b,
+            relationship_profile=self.relationship_profile_text,
             group_context=self.group_context_text,
             joint_guidance_context=self.joint_guidance_text
         )
@@ -123,6 +125,7 @@ class JointAgent:
             'user_input': user_input,
             'sender_name': sender_name,
             'messages_history': messages_history,
+            'relationship_profile': self.relationship_profile_text,
             'group_context': self.group_context_text,
             'joint_guidance_context': self.joint_guidance_text,
             'private_a_context': self.accumulated_state['private_a_context'],

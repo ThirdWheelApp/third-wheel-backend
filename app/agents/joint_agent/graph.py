@@ -28,6 +28,7 @@ class JointAgentState(TypedDict):
     user_input: str
     sender_name: str
     messages_history: list
+    relationship_profile: str
     group_context: str
     joint_guidance_context: str
 
@@ -59,6 +60,7 @@ def create_joint_agent_graph(
     group_id: str,
     private_agent_a: PrivateAgent | None = None,
     private_agent_b: PrivateAgent | None = None,
+    relationship_profile: str = "",
     group_context: str = "",
     joint_guidance_context: str = ""
 ):
@@ -136,10 +138,15 @@ Format: YES|reason or NO|reason"""
             latency = int((time.time() - start_time) * 1000)
 
             decision_text = response.content[0].text.strip()
-            logger.info(f"[JointAgent] Context decision: {decision_text} ({latency}ms)")
 
-            # Parse decision
+            # Parse decision before logging. The model-provided reason can name
+            # sensitive inferred topics, so logs should only include the boolean.
             needs_context = decision_text.upper().startswith("YES")
+            logger.info(
+                "[JointAgent] Context decision: %s (%sms)",
+                "YES" if needs_context else "NO",
+                latency,
+            )
             state['needs_more_context'] = needs_context
             state['input_tokens'] = state.get('input_tokens', 0) + response.usage.input_tokens
             state['output_tokens'] = state.get('output_tokens', 0) + response.usage.output_tokens
@@ -177,7 +184,10 @@ IMPORTANT: Only share information with secret_level <= {settings.COUPLES_MAX_SEC
                 if context_a and "No specific context" not in context_a:
                     state['private_a_context'] = state.get('private_a_context', []) + [context_a]
                     state['query_count_a'] = state.get('query_count_a', 0) + 1
-                    logger.info(f"[JointAgent] Received context from Agent A: {context_a[:100]}...")
+                    logger.info(
+                        "[JointAgent] Received context from Agent A (%s chars)",
+                        len(context_a),
+                    )
             except Exception as e:
                 logger.error(f"[JointAgent] Error querying Private Agent A: {e}")
 
@@ -191,7 +201,10 @@ IMPORTANT: Only share information with secret_level <= {settings.COUPLES_MAX_SEC
                 if context_b and "No specific context" not in context_b:
                     state['private_b_context'] = state.get('private_b_context', []) + [context_b]
                     state['query_count_b'] = state.get('query_count_b', 0) + 1
-                    logger.info(f"[JointAgent] Received context from Agent B: {context_b[:100]}...")
+                    logger.info(
+                        "[JointAgent] Received context from Agent B (%s chars)",
+                        len(context_b),
+                    )
             except Exception as e:
                 logger.error(f"[JointAgent] Error querying Private Agent B: {e}")
 
@@ -205,6 +218,9 @@ IMPORTANT: Only share information with secret_level <= {settings.COUPLES_MAX_SEC
 
         # Build context sections
         context_sections = []
+
+        if state.get('relationship_profile'):
+            context_sections.append(f"Relationship profile:\n{state['relationship_profile']}")
 
         if state.get('group_context'):
             context_sections.append(f"Relationship context:\n{state['group_context']}")

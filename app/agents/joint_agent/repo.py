@@ -6,7 +6,7 @@ Simpler than Private Agent since Joint Agent mainly orchestrates.
 """
 
 from sqlalchemy.orm import Session
-from app.db.models import GroupContext, JointGuidanceContext
+from app.db.models import Group, GroupContext, JointGuidanceContext, User
 from app.config.settings import settings
 from typing import List, Dict
 import uuid
@@ -68,3 +68,34 @@ class JointAgentRepository:
         )
 
         return [ctx.data for ctx in guidance_contexts if ctx.data]
+
+    def get_relationship_profile_text(self, group_id: str) -> str:
+        """Return stable shared relationship identity facts for joint prompts."""
+        group_uuid = uuid.UUID(group_id) if isinstance(group_id, str) else group_id
+        group = self.db.query(Group).filter(Group.id == group_uuid).first()
+        if not group:
+            return (
+                "Relationship profile unavailable. Use only names and pronouns "
+                "explicitly stated in the live transcript; do not infer gendered pronouns."
+            )
+
+        partner_names = []
+        for partner_id in [group.partner1_id, group.partner2_id]:
+            if partner_id:
+                user = self.db.query(User).filter(User.id == partner_id).first()
+                if user:
+                    partner_names.append(user.name)
+
+        relationship_type = group.relationship_type or "not specified"
+        relationship_description = group.relationship_description or "not specified"
+
+        return "\n".join([
+            f"Partners: {', '.join(partner_names) if partner_names else 'not specified'}",
+            f"Relationship type: {relationship_type}",
+            f"Relationship description: {relationship_description}",
+            (
+                "Pronoun/gender rule: Use explicitly stated pronouns/gender consistently. "
+                "If unknown or ambiguous, use names or 'your partner'; do not infer gendered "
+                "pronouns from names, relationship type, sexual roles, abuse dynamics, or stereotypes."
+            ),
+        ])

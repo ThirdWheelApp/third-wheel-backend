@@ -212,6 +212,11 @@ class ContextService:
 
             # Apply secret level boosts based on user messages
             self._apply_secret_level_boosts(extracted_data, messages)
+            self._add_deterministic_identity_contexts(
+                session=session,
+                extracted_data=extracted_data,
+                messages=messages,
+            )
 
             # Enforce session-type data boundaries before persisting.
             extracted_data = self._normalize_extracted_data_for_session(
@@ -297,6 +302,58 @@ class ContextService:
             for ctx in extracted_data.get('user_b_contexts', []):
                 current = ctx.get('secret_level', 5)
                 ctx['secret_level'] = min(10, max(current, max_boost))
+
+    def _add_deterministic_identity_contexts(
+        self,
+        session: SessionModel,
+        extracted_data: Dict,
+        messages: List,
+    ) -> None:
+        """
+        Preserve clear partner-pronoun evidence even if the LLM extractor omits it.
+
+        This is intentionally narrow: it only records a pronoun memory when the
+        user has mentioned a partner/relationship and one pronoun set clearly
+        dominates their own messages. If it is ambiguous, we store nothing and
+        prompts fall back to non-gendered language.
+        """
+        if session.type != "private" or not session.participants:
+            return
+
+        user_messages = [
+            (msg.content or "")
+            for msg in messages
+            if msg.sender_id != "therapist"
+        ]
+        combined = "\n".join(user_messages).lower()
+        if not re.search(r"\b(partner|wife|girlfriend|boyfriend|husband|spouse)\b", combined):
+            return
+
+        pronoun_counts = {
+            "she/her": len(re.findall(r"\b(she|her|hers)\b", combined)),
+            "he/him": len(re.findall(r"\b(he|him|his)\b", combined)),
+            "they/them": len(re.findall(r"\b(they|them|their|theirs)\b", combined)),
+        }
+        pronoun_set, count = max(pronoun_counts.items(), key=lambda item: item[1])
+        other_counts = [value for key, value in pronoun_counts.items() if key != pronoun_set]
+
+        if count < 2 or any(other and count < other * 2 for other in other_counts):
+            return
+
+        context_text = f"User refers to partner with {pronoun_set} pronouns."
+        existing_contexts = (
+            list(extracted_data.get("user_a_contexts", []) or []) +
+            list(extracted_data.get("user_b_contexts", []) or [])
+        )
+        if any((ctx.get("text") or "").lower() == context_text.lower() for ctx in existing_contexts):
+            return
+
+        extracted_data.setdefault("user_a_contexts", []).append({
+            "text": context_text,
+            "secret_level": 1,
+            "tags": ["identity", "partner-pronouns"],
+            "category": "identity",
+        })
 
     async def _save_contexts(
         self,

@@ -455,6 +455,7 @@ class ChatService:
             logger.warning(
                 f"Joint response failed privacy validation ({privacy_check.reasons}); repairing response."
             )
+            repaired_response = None
             if self._is_source_seeking_message(content):
                 candidate = self._source_seeking_boundary_response()
                 repair_check = PrivacyBoundaryService.validate_joint_response(
@@ -466,34 +467,38 @@ class ChatService:
                 )
                 repaired_response = candidate if repair_check.ok else None
             else:
-                candidate = self._privacy_safe_redirection_response()
-                repair_check = PrivacyBoundaryService.validate_joint_response(
-                    candidate,
-                    private_contexts=private_contexts_for_guard,
-                    joint_conversation_text=joint_conversation_text,
-                    joint_conversation_by_user=joint_conversation_by_user,
-                    public_terms=public_terms
-                )
-                repaired_response = candidate if repair_check.ok else None
+                repair_reasons = privacy_check.reasons
+                for attempt in range(2):
+                    candidate = self._repair_joint_response(
+                        messages_history=messages_history,
+                        reasons=repair_reasons,
+                        retry=attempt > 0
+                    )
+                    repair_check = PrivacyBoundaryService.validate_joint_response(
+                        candidate,
+                        private_contexts=private_contexts_for_guard,
+                        joint_conversation_text=joint_conversation_text,
+                        joint_conversation_by_user=joint_conversation_by_user,
+                        public_terms=public_terms
+                    )
+                    if self._is_circuit_breaker_response(candidate):
+                        repair_reasons = repair_check.reasons or ["repair_returned_circuit_breaker"]
+                        continue
+                    if repair_check.ok:
+                        repaired_response = candidate
+                        break
+                    repair_reasons = repair_check.reasons
+
                 if not repaired_response:
-                    repair_reasons = privacy_check.reasons
-                    for attempt in range(2):
-                        candidate = self._repair_joint_response(
-                            messages_history=messages_history,
-                            reasons=repair_reasons,
-                            retry=attempt > 0
-                        )
-                        repair_check = PrivacyBoundaryService.validate_joint_response(
-                            candidate,
-                            private_contexts=private_contexts_for_guard,
-                            joint_conversation_text=joint_conversation_text,
-                            joint_conversation_by_user=joint_conversation_by_user,
-                            public_terms=public_terms
-                        )
-                        if repair_check.ok:
-                            repaired_response = candidate
-                            break
-                        repair_reasons = repair_check.reasons
+                    candidate = self._privacy_safe_redirection_response(messages_history)
+                    repair_check = PrivacyBoundaryService.validate_joint_response(
+                        candidate,
+                        private_contexts=private_contexts_for_guard,
+                        joint_conversation_text=joint_conversation_text,
+                        joint_conversation_by_user=joint_conversation_by_user,
+                        public_terms=public_terms
+                    )
+                    repaired_response = candidate if repair_check.ok else None
 
             if repaired_response:
                 response_text = repaired_response
@@ -503,6 +508,61 @@ class ChatService:
                 )
                 response_text = self._joint_privacy_circuit_breaker_response()
             suggest_end = False
+
+        opened_terms = PrivacyBoundaryService.opened_sensitive_terms_for_subject(
+            content,
+            private_contexts_for_guard,
+            user_id,
+        )
+        if opened_terms and not self._contains_any_term(response_text, opened_terms):
+            logger.warning(
+                "Joint response missed explicit live disclosure acknowledgement; repairing response."
+            )
+            repaired_response = None
+            repair_instruction = (
+                "The latest speaker has made these exact words public in the live transcript: "
+                f"{', '.join(opened_terms[:4])}. "
+                "The fresh reply must acknowledge at least one of those exact words or phrases, "
+                "and must not add any details beyond the live transcript."
+            )
+            repair_reasons = ["missing_live_disclosure_acknowledgement"]
+            for attempt in range(2):
+                candidate = self._repair_joint_response(
+                    messages_history=messages_history,
+                    reasons=repair_reasons,
+                    retry=attempt > 0,
+                    extra_instruction=repair_instruction,
+                )
+                repair_check = PrivacyBoundaryService.validate_joint_response(
+                    candidate,
+                    private_contexts=private_contexts_for_guard,
+                    joint_conversation_text=joint_conversation_text,
+                    joint_conversation_by_user=joint_conversation_by_user,
+                    public_terms=public_terms
+                )
+                if repair_check.ok and self._contains_any_term(candidate, opened_terms):
+                    repaired_response = candidate
+                    break
+                repair_reasons = repair_check.reasons or repair_reasons
+
+            if repaired_response:
+                response_text = repaired_response
+                suggest_end = False
+            else:
+                candidate = self._prepend_live_disclosure_acknowledgement(
+                    response_text,
+                    opened_terms[0],
+                )
+                candidate_check = PrivacyBoundaryService.validate_joint_response(
+                    candidate,
+                    private_contexts=private_contexts_for_guard,
+                    joint_conversation_text=joint_conversation_text,
+                    joint_conversation_by_user=joint_conversation_by_user,
+                    public_terms=public_terms
+                )
+                if candidate_check.ok:
+                    response_text = candidate
+                    suggest_end = False
 
         # Update session context
         session.current_context = updated_context
@@ -587,18 +647,20 @@ class ChatService:
         self,
         messages_history: List[Dict],
         reasons: List[str],
-        retry: bool = False
+        retry: bool = False,
+        extra_instruction: str = ""
     ) -> str:
         """Generate a fresh privacy-safe joint reply from joint transcript only."""
         transcript = format_messages_for_llm(messages_history[-12:])
-        retry_instruction = ""
+        retry_instruction = extra_instruction.strip()
         if retry:
-            retry_instruction = (
+            retry_instruction = " ".join(filter(None, [
+                retry_instruction,
                 "This is a retry because the first repair still failed. Be stricter: "
                 "do not mention what the therapist knows, heard, was told, can say, "
                 "cannot say, can confirm, or cannot confirm. Do not repeat guessed "
                 "sensitive-topic words unless the subject partner named them."
-            )
+            ]))
         prompt = JOINT_RESPONSE_REPAIR_PROMPT_TEMPLATE.format(
             joint_transcript=transcript,
             reasons=", ".join(reasons),
@@ -630,6 +692,12 @@ class ChatService:
             "while listening. What is one small truth or request each of you can put into words right now?"
         )
 
+    @classmethod
+    def _is_circuit_breaker_response(cls, text: str) -> bool:
+        return " ".join((text or "").split()) == " ".join(
+            cls._joint_privacy_circuit_breaker_response().split()
+        )
+
     @staticmethod
     def _is_source_seeking_message(content: str) -> bool:
         lower = (content or "").lower()
@@ -657,13 +725,50 @@ class ChatService:
         )
 
     @staticmethod
-    def _privacy_safe_redirection_response() -> str:
+    def _privacy_safe_redirection_response(messages_history: Optional[List[Dict]] = None) -> str:
+        latest = None
+        for message in reversed(messages_history or []):
+            if message.get("sender_id") != "therapist":
+                latest = message
+                break
+
+        speaker = (latest or {}).get("sender_name") or "I"
+        content = ((latest or {}).get("content") or "").lower()
+
+        if any(term in content for term in ("trust", "distant", "distance", "tense")):
+            return (
+                f"{speaker}, the distance and uncertainty you are naming deserve a direct response. "
+                "Let's keep this grounded in what each of you is ready to say in this conversation. "
+                "One partner can offer one honest sentence, and the other can name what would help them "
+                "stay steady while listening. What is the next sentence that feels possible right now?"
+            )
+
+        if any(term in content for term in ("scared", "overwhelmed", "guilty", "accountability", "honesty")):
+            return (
+                f"{speaker}, I hear that you are trying to move toward honesty without moving faster "
+                "than you can handle. Let's slow it down to one present-tense sentence and one request "
+                "for support. What can you say here, in your own words, without adding more than you are "
+                "ready to add?"
+            )
+
         return (
-            "Jordan, it makes sense that uncertainty is hard to sit with. Alex, you have named "
-            "guilt and fear, and you also have a choice about pace. The next useful step is one "
-            "honest sentence Alex can say now and one request Jordan can make for steadiness. "
-            "Alex, what can you name truthfully right now?"
+            "It makes sense to want clarity, and it also helps to move one step at a time. "
+            "Let's stay with what each of you can name in this conversation: one honest sentence "
+            "from the person ready to speak, and one request for steadiness from the person listening. "
+            "What is the next sentence that feels possible right now?"
         )
+
+    @staticmethod
+    def _contains_any_term(text: str, terms: List[str]) -> bool:
+        lowered = (text or "").lower()
+        return any(term.lower() in lowered for term in terms)
+
+    @staticmethod
+    def _prepend_live_disclosure_acknowledgement(text: str, term: str) -> str:
+        term = " ".join((term or "").split())
+        if not term:
+            return text
+        return f'You just said "{term}" out loud. {text}'
 
     def _log_llm_call(self, session_id: str, metrics: Dict):
         """Log LLM call for monitoring and cost tracking."""

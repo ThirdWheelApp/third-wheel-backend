@@ -138,6 +138,44 @@ def test_subject_disclosure_opens_private_infidelity_topic():
     assert result.ok
 
 
+def test_subject_disclosure_allows_infidelity_synonym():
+    alex_context = {
+        "data": {"text": "Alex had an affair two months ago and feels guilty."},
+        "subject_user_id": "alex-id",
+    }
+
+    result = PrivacyBoundaryService.validate_joint_response(
+        "This infidelity disclosure is painful, so let's slow down and focus on accountability.",
+        [alex_context],
+        joint_conversation_text="Alex: I cheated, and I need help saying that here.",
+        joint_conversation_by_user={
+            "alex-id": "I cheated, and I need help saying that here.",
+            "jordan-id": "",
+        },
+    )
+
+    assert result.ok
+
+
+def test_opened_sensitive_terms_only_for_source_subject():
+    alex_context = {
+        "data": {"text": "Alex had an affair two months ago and feels guilty."},
+        "subject_user_id": "alex-id",
+    }
+
+    assert PrivacyBoundaryService.opened_sensitive_terms_for_subject(
+        "I cheated, and I need help saying that here.",
+        [alex_context],
+        "alex-id",
+    ) == ["cheated"]
+
+    assert PrivacyBoundaryService.opened_sensitive_terms_for_subject(
+        "Is this about cheating?",
+        [alex_context],
+        "jordan-id",
+    ) == []
+
+
 def test_joint_response_validator_flags_arbitrary_private_specifics():
     result = PrivacyBoundaryService.validate_joint_response(
         "The gambling debt is creating pressure, and the hidden bank account needs care.",
@@ -189,6 +227,26 @@ def test_public_partner_names_are_not_private_specifics():
     assert result.ok
 
 
+def test_public_names_do_not_create_private_phrase_matches():
+    alex_context = {
+        "data": {"text": "Alex wants to work toward honesty and talk directly."},
+        "subject_user_id": "alex-id",
+    }
+
+    result = PrivacyBoundaryService.validate_joint_response(
+        "Jordan, ask Alex directly and give them room to answer in their own words.",
+        [alex_context],
+        joint_conversation_text="Jordan: Are you keeping something from me?",
+        joint_conversation_by_user={
+            "jordan-id": "Are you keeping something from me?",
+            "alex-id": "",
+        },
+        public_terms={"alex", "jordan"},
+    )
+
+    assert result.ok
+
+
 def test_joint_response_validator_allows_arbitrary_specifics_after_joint_disclosure():
     result = PrivacyBoundaryService.validate_joint_response(
         "The gambling debt is creating pressure, so let's talk about accountability carefully.",
@@ -197,6 +255,28 @@ def test_joint_response_validator_allows_arbitrary_specifics_after_joint_disclos
     )
 
     assert result.ok
+
+
+def test_subject_disclosure_still_blocks_unintroduced_private_details():
+    alex_context = {
+        "data": {
+            "text": "Alex used the emergency fund for gambling debt through a hidden bank account."
+        },
+        "subject_user_id": "alex-id",
+    }
+
+    result = PrivacyBoundaryService.validate_joint_response(
+        "The gambling debt is now in the room, but the hidden bank account also needs care.",
+        [alex_context],
+        joint_conversation_text="Alex: I used our emergency fund for gambling debt.",
+        joint_conversation_by_user={
+            "alex-id": "I used our emergency fund for gambling debt.",
+            "jordan-id": "",
+        },
+    )
+
+    assert not result.ok
+    assert "response_mentions_private_source_specifics" in result.reasons
 
 
 def test_joint_response_validator_still_blocks_private_source_claims():

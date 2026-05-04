@@ -27,16 +27,19 @@ STOPWORDS = {
 
 SAFE_PROCESS_TERMS = {
     "accountability", "avoidance", "balance", "boundaries", "boundary",
-    "care", "carrying", "clarity", "communication", "conflict", "connection",
-    "conversation", "defensiveness", "details", "distance", "emotional",
-    "emotion", "emotions", "experience", "experiencing", "feel", "feeling",
-    "feelings", "felt", "guilt", "guilty", "fear", "fears", "help",
-    "helpful", "helping", "honesty",
+    "acknowledge", "acknowledged", "alone", "breath", "care", "carrying",
+    "clarity", "communication", "conflict", "connection", "conversation",
+    "courage", "defensiveness", "details", "direct", "directly", "disclose",
+    "disclosed", "disclosure", "distance", "emotional", "emotion",
+    "emotions", "experience", "experiencing", "feel", "feeling", "feelings",
+    "felt", "guilt", "guilty", "fear", "fears", "hard", "heard", "help",
+    "helpful", "helping", "honest", "honesty",
     "intimacy", "openness", "pace", "pacing", "pattern", "patterns",
-    "ready", "readiness", "repair", "safety", "scared", "secure", "security",
-    "share", "shared", "sharing", "support", "tension", "transparency", "trust", "uncertain",
-    "uncertainty", "understand", "understanding", "values", "vulnerable",
-    "vulnerability", "willing", "work", "working",
+    "present", "ready", "readiness", "repair", "room", "safety", "scared",
+    "secure", "security", "share", "shared", "sharing", "slow", "slowly",
+    "support", "tension", "transparency", "trust", "truth", "truthful",
+    "uncertain", "uncertainty", "understand", "understanding", "values",
+    "vulnerable", "vulnerability", "willing", "work", "working",
 }
 
 SHORT_SOURCE_SPECIFIC_TERMS = {"sex", "std", "sti", "hiv", "ivf", "gay"}
@@ -146,6 +149,14 @@ CONVERSATION_OPENED_TOPIC_PATTERNS = {
         r"\bassault\b",
         r"\bself[- ]?harm\b",
     ],
+    "financial_or_addiction": [
+        r"\bgambling\b",
+        r"\bgamble(?:d|s)?\b",
+        r"\bdebt(?:s)?\b",
+        r"\bemergency fund\b",
+        r"\bshared money\b",
+        r"\baddiction\b",
+    ],
 }
 
 JOINT_RESPONSE_FORBIDDEN_PATTERNS = [
@@ -167,6 +178,14 @@ SENSITIVE_TOPIC_LABELS = {
         r"\babuse\b",
         r"\bassault\b",
         r"\bself[- ]?harm\b",
+    ],
+    "financial_or_addiction": [
+        r"\bgambling\b",
+        r"\bgamble(?:d|s)?\b",
+        r"\bdebt(?:s)?\b",
+        r"\bemergency fund\b",
+        r"\bshared money\b",
+        r"\baddiction\b",
     ],
 }
 
@@ -214,6 +233,53 @@ class PrivacyBoundaryService:
                 topics.append(topic)
         return topics
 
+    @classmethod
+    def opened_sensitive_terms_for_subject(
+        cls,
+        latest_text: str,
+        source_contexts: Sequence[Dict] | Sequence[str] | None,
+        subject_user_id: str,
+    ) -> List[str]:
+        """
+        Return sensitive words/phrases the subject partner has just made public.
+
+        This is a quality helper, not a privacy permission by itself. It only
+        returns terms when the same broad topic exists in private source
+        context for the same subject, which prevents a partner's guess from
+        being treated as the source partner's disclosure.
+        """
+        if not latest_text or not source_contexts or not subject_user_id:
+            return []
+
+        subject_source_texts: List[str] = []
+        for source_context in source_contexts:
+            if isinstance(source_context, str):
+                subject_source_texts.append(source_context)
+                continue
+            if cls._context_subject_id(source_context) == str(subject_user_id):
+                data = source_context.get("data") if isinstance(source_context.get("data"), dict) else source_context
+                source_text = str((data or {}).get("text") or (data or {}).get("guidance") or "")
+                if source_text:
+                    subject_source_texts.append(source_text)
+
+        if not subject_source_texts:
+            return []
+
+        terms: List[str] = []
+        seen = set()
+        source_text = "\n".join(subject_source_texts)
+        for patterns in CONVERSATION_OPENED_TOPIC_PATTERNS.values():
+            if not cls._matches_any_pattern(source_text, patterns):
+                continue
+            for pattern in patterns:
+                for match in re.finditer(pattern, latest_text or "", flags=re.IGNORECASE):
+                    term = " ".join(match.group(0).lower().split())
+                    if term and term not in seen:
+                        terms.append(term)
+                        seen.add(term)
+
+        return terms
+
     @staticmethod
     def _words(text: str) -> List[str]:
         return re.findall(r"[a-zA-Z]+", text.lower())
@@ -227,6 +293,28 @@ class PrivacyBoundaryService:
         if word in STOPWORDS or word in SAFE_PROCESS_TERMS:
             return False
         return True
+
+    @staticmethod
+    def _matches_any_pattern(text: str, patterns: Sequence[str]) -> bool:
+        return any(re.search(pattern, text or "", flags=re.IGNORECASE) for pattern in patterns)
+
+    @classmethod
+    def _opened_topic_patterns_for_source(cls, source_text: str, opened_text: str) -> List[str]:
+        """
+        Return topic patterns that are present in private source material and
+        have been opened by the same source subject in the joint conversation.
+
+        This lets the runtime acknowledge the category after disclosure
+        (for example "infidelity" after "I cheated") without allowing
+        unintroduced concrete details from the private source.
+        """
+        opened_patterns: List[str] = []
+        for patterns in CONVERSATION_OPENED_TOPIC_PATTERNS.values():
+            source_has_topic = cls._matches_any_pattern(source_text, patterns)
+            opened_by_subject = cls._matches_any_pattern(opened_text, patterns)
+            if source_has_topic and opened_by_subject:
+                opened_patterns.extend(patterns)
+        return opened_patterns
 
     @classmethod
     def source_specific_matches(
@@ -269,23 +357,40 @@ class PrivacyBoundaryService:
                 ) or ""
 
             opened_text = opened_text.lower()
+            opened_topic_patterns = cls._opened_topic_patterns_for_source(source_text, opened_text)
             source_terms.clear()
             source_phrases.clear()
             words = cls._words(source_text)
             specific_flags = [cls._is_source_specific_word(word) for word in words]
             for word, is_specific in zip(words, specific_flags):
-                if is_specific and word not in public_term_set:
+                if (
+                    is_specific
+                    and word not in public_term_set
+                    and not cls._matches_any_pattern(word, opened_topic_patterns)
+                ):
                     source_terms.add(word)
 
             for size in (2, 3):
                 for idx in range(0, max(0, len(words) - size + 1)):
                     phrase_words = words[idx:idx + size]
                     phrase_flags = specific_flags[idx:idx + size]
-                    if not any(phrase_flags):
+                    private_specific_words = [
+                        word
+                        for word, is_specific in zip(phrase_words, phrase_flags)
+                        if (
+                            is_specific
+                            and word not in public_term_set
+                            and not cls._matches_any_pattern(word, opened_topic_patterns)
+                        )
+                    ]
+                    if not private_specific_words:
                         continue
                     if all(word in STOPWORDS for word in phrase_words):
                         continue
-                    source_phrases.add(" ".join(phrase_words))
+                    phrase = " ".join(phrase_words)
+                    if cls._matches_any_pattern(phrase, opened_topic_patterns):
+                        continue
+                    source_phrases.add(phrase)
 
             for term in sorted(source_terms):
                 pattern = rf"\b{re.escape(term)}\b"

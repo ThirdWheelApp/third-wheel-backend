@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, Group, Session, User
+from app.db.models import Base, Group, Message, Session, User
 from app.services.context_service import ContextService
 from app.services.session_service import SessionService
 
@@ -185,3 +185,168 @@ def test_private_session_contexts_default_to_non_shareable(db_session):
     assert normalized["check_ins"] == []
     assert len(normalized["user_a_contexts"]) == 2
     assert all(ctx["secret_level"] >= 1 for ctx in normalized["user_a_contexts"])
+
+
+def test_private_session_extracts_clear_partner_pronoun_identity(db_session):
+    user = User(
+        id=uuid.uuid4(),
+        email="alex-pronouns@example.com",
+        name="Alex Pronouns",
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    private_session = Session(
+        id=uuid.uuid4(),
+        group_id=uuid.uuid4(),
+        type="private",
+        status="ending",
+        created_by=user.id,
+        participants=[user.id],
+    )
+
+    messages = [
+        Message(
+            id=uuid.uuid4(),
+            session_id=private_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="My partner hurt me.",
+            sequence_number=1,
+        ),
+        Message(
+            id=uuid.uuid4(),
+            session_id=private_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="She usually gets angry when I bring it up.",
+            sequence_number=2,
+        ),
+        Message(
+            id=uuid.uuid4(),
+            session_id=private_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="She might punish me again.",
+            sequence_number=3,
+        ),
+    ]
+
+    extracted = {"user_a_contexts": [], "user_b_contexts": []}
+    ContextService(db_session)._add_deterministic_identity_contexts(
+        session=private_session,
+        extracted_data=extracted,
+        messages=messages,
+    )
+
+    assert extracted["user_a_contexts"] == [
+        {
+            "text": "User refers to partner with she/her pronouns.",
+            "secret_level": 1,
+            "tags": ["identity", "partner-pronouns"],
+            "category": "identity",
+        }
+    ]
+
+
+def test_private_session_skips_ambiguous_partner_pronoun_identity(db_session):
+    user = User(
+        id=uuid.uuid4(),
+        email="alex-ambiguous@example.com",
+        name="Alex Ambiguous",
+    )
+
+    private_session = Session(
+        id=uuid.uuid4(),
+        group_id=uuid.uuid4(),
+        type="private",
+        status="ending",
+        created_by=user.id,
+        participants=[user.id],
+    )
+
+    messages = [
+        Message(
+            id=uuid.uuid4(),
+            session_id=private_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="My partner and my friend are both involved.",
+            sequence_number=1,
+        ),
+        Message(
+            id=uuid.uuid4(),
+            session_id=private_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="She said one thing and he said another.",
+            sequence_number=2,
+        ),
+    ]
+
+    extracted = {"user_a_contexts": [], "user_b_contexts": []}
+    ContextService(db_session)._add_deterministic_identity_contexts(
+        session=private_session,
+        extracted_data=extracted,
+        messages=messages,
+    )
+
+    assert extracted["user_a_contexts"] == []
+
+
+def test_joint_session_skips_deterministic_partner_pronoun_identity(db_session):
+    user = User(
+        id=uuid.uuid4(),
+        email="alex-joint-pronouns@example.com",
+        name="Alex Joint Pronouns",
+    )
+    partner = User(
+        id=uuid.uuid4(),
+        email="jordan-joint-pronouns@example.com",
+        name="Jordan Joint Pronouns",
+    )
+
+    joint_session = Session(
+        id=uuid.uuid4(),
+        group_id=uuid.uuid4(),
+        type="joint",
+        status="ending",
+        created_by=user.id,
+        participants=[user.id, partner.id],
+    )
+
+    messages = [
+        Message(
+            id=uuid.uuid4(),
+            session_id=joint_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="My partner is worried.",
+            sequence_number=1,
+        ),
+        Message(
+            id=uuid.uuid4(),
+            session_id=joint_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="She wants to slow down.",
+            sequence_number=2,
+        ),
+        Message(
+            id=uuid.uuid4(),
+            session_id=joint_session.id,
+            sender_id=str(user.id),
+            sender_name=user.name,
+            content="She said this feels hard.",
+            sequence_number=3,
+        ),
+    ]
+
+    extracted = {"user_a_contexts": [], "user_b_contexts": []}
+    ContextService(db_session)._add_deterministic_identity_contexts(
+        session=joint_session,
+        extracted_data=extracted,
+        messages=messages,
+    )
+
+    assert extracted["user_a_contexts"] == []

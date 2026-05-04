@@ -144,6 +144,64 @@ def test_partner_assigned_task_waits_for_assignee(db_session, couple_session):
     assert task.verification_feedback == "Not the right task"
 
 
+def test_one_time_task_has_single_completion_even_with_long_duration(
+    db_session,
+    couple_session,
+):
+    alex, jordan, group, session = couple_session
+    service = CheckInService(db_session)
+
+    task = service.create_task_proposal(
+        group_id=str(group.id),
+        assigned_to=str(alex.id),
+        verifier_id=str(jordan.id),
+        proposed_by=str(jordan.id),
+        title="Lead one Sunday planning conversation",
+        frequency="one_time",
+        duration_days=7,
+        session_id=str(session.id),
+    )
+
+    assert task.progress == {"completed": 0, "total": 1}
+
+    asyncio.run(
+        service.decide_task(
+            checkin_id=str(task.id),
+            user_id=str(alex.id),
+            decision="accepted",
+        )
+    )
+
+    done = asyncio.run(service.mark_checkin_done(str(task.id), str(alex.id)))
+
+    db_session.refresh(task)
+    assert done["status"] == "completed"
+    assert task.progress == {"completed": 1, "total": 1}
+
+
+def test_one_this_week_task_overrides_model_weekly_frequency(
+    db_session,
+    couple_session,
+):
+    alex, jordan, group, session = couple_session
+    service = CheckInService(db_session)
+
+    task = service.create_task_proposal(
+        group_id=str(group.id),
+        assigned_to=str(alex.id),
+        verifier_id=str(jordan.id),
+        proposed_by=str(jordan.id),
+        title="Lead Sunday planning conversation",
+        description="Alex will lead one 10-minute planning conversation on Sunday this week.",
+        frequency="weekly",
+        duration_days=7,
+        session_id=str(session.id),
+    )
+
+    assert task.frequency == "one_time"
+    assert task.progress == {"completed": 0, "total": 1}
+
+
 def test_session_extracted_task_concludes_pending_actions_after_both_decide(
     db_session,
     couple_session,

@@ -145,7 +145,13 @@ class CheckInService:
             return None
 
         normalized_frequency = self._normalize_frequency(frequency)
-        normalized_duration = self._normalize_duration_days(duration_days)
+        if normalized_frequency != "one_time" and self._looks_one_time_task(clean_title, description):
+            normalized_frequency = "one_time"
+        normalized_duration = (
+            1
+            if normalized_frequency == "one_time"
+            else self._normalize_duration_days(duration_days)
+        )
         assigned_approved = proposer_uuid == assigned_uuid
         verifier_approved = True if verifier_uuid is None else proposer_uuid == verifier_uuid
 
@@ -623,6 +629,20 @@ class CheckInService:
         if value in {"one_time", "one time", "once", "none"}:
             return "one_time"
         return "daily"
+
+    @staticmethod
+    def _looks_one_time_task(title: str, description: Optional[str]) -> bool:
+        text = f"{title or ''} {description or ''}".lower()
+        if any(marker in text for marker in ["every day", "daily", "every week", "weekly", "each week"]):
+            return False
+        if any(marker in text for marker in ["one-time", "one time", "once", "single"]):
+            return True
+        if re.search(r"\b(one|1)\b", text) and re.search(
+            r"\b(this week|this sunday|this weekend|today|tomorrow)\b",
+            text,
+        ):
+            return True
+        return False
 
     @staticmethod
     def _normalize_duration_days(duration_days) -> int:
