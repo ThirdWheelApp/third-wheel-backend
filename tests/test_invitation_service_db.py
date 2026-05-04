@@ -199,10 +199,20 @@ def test_no_email_invite_flow_through_api(db_session):
                 "groupId": invite_payload["groupId"],
                 "sessionType": "joint",
                 "participants": [str(inviter_id), str(partner_id)],
+                "scheduledFor": "2030-01-01T00:00:00Z",
             },
         )
         assert joint_response.status_code == 200, joint_response.text
-        assert set(joint_response.json()["participants"]) == {str(inviter_id), str(partner_id)}
+        joint_payload = joint_response.json()
+        assert joint_payload["status"] == "scheduled"
+        assert set(joint_payload["participants"]) == {str(inviter_id), str(partner_id)}
+
+        app.dependency_overrides[get_current_user] = lambda: str(partner_id)
+        join_response = client.post(f"/api/sessions/{joint_payload['id']}/join")
+        assert join_response.status_code == 200, join_response.text
+        joined_payload = join_response.json()
+        assert joined_payload["status"] == "active"
+        assert joined_payload["startedAt"]
     finally:
         app.dependency_overrides.clear()
         client.close()

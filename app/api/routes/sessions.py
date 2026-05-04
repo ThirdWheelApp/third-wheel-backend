@@ -5,8 +5,9 @@ Session API Routes
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.database import get_db, SessionLocal
-from app.db.models import Session as SessionModel, Message, Group
+from app.db.models import Session as SessionModel, Message, Group, User
 from app.services.session_service import SessionService
+from app.services.notification_service import NotificationService, NotificationType
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
 from app.utils.logger import get_logger
@@ -44,6 +45,69 @@ def process_session_end_background(session_id: str) -> None:
         logger.error(f"Background session end processing failed for {session_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+async def notify_joint_session_invite(
+    db: Session,
+    session: SessionModel,
+    current_user_id: str
+) -> None:
+    """Best-effort partner notification for scheduled/waiting joint sessions."""
+    if session.type != "joint" or session.status != "scheduled":
+        return
+
+    creator = db.query(User).filter(User.id == uuid.UUID(current_user_id)).first()
+    creator_name = creator.name if creator else "Your partner"
+    notification_service = NotificationService(db)
+
+    for participant_id in session.participants:
+        participant_id_str = str(participant_id)
+        if participant_id_str == current_user_id:
+            continue
+
+        try:
+            await notification_service.create_notification(
+                user_id=participant_id_str,
+                notification_type=NotificationType.JOINT_SESSION_INVITE,
+                data={
+                    "sessionId": str(session.id),
+                    "groupId": str(session.group_id) if session.group_id else None,
+                    "createdBy": current_user_id,
+                    "createdByName": creator_name,
+                    "scheduledFor": session.scheduled_for.isoformat() if session.scheduled_for else None,
+                    "message": f"{creator_name} invited you to a joint session",
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify joint session invitee {participant_id}: {e}")
+
+
+async def notify_partner_joined_session(
+    db: Session,
+    session: SessionModel,
+    joined_user_id: str
+) -> None:
+    """Best-effort notification to the creator that the partner joined."""
+    if not session.created_by or str(session.created_by) == joined_user_id:
+        return
+
+    joined_user = db.query(User).filter(User.id == uuid.UUID(joined_user_id)).first()
+    joined_name = joined_user.name if joined_user else "Your partner"
+
+    try:
+        await NotificationService(db).create_notification(
+            user_id=str(session.created_by),
+            notification_type=NotificationType.PARTNER_JOINED_SESSION,
+            data={
+                "sessionId": str(session.id),
+                "groupId": str(session.group_id) if session.group_id else None,
+                "joinedBy": joined_user_id,
+                "joinedByName": joined_name,
+                "message": f"{joined_name} joined your joint session",
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Failed to notify session creator {session.created_by}: {e}")
 
 
 @router.post("/", response_model=SessionResponse)
@@ -113,11 +177,14 @@ async def create_session(
             session_type=session_data.session_type,
             created_by=current_user_id,  # Authenticated user
             participants=session_data.participants,
-            scheduled_for=session_data.scheduled_for
+            scheduled_for=session_data.scheduled_for,
+            invite_message=session_data.invite_message
         )
 
         logger.info(f"Session created successfully: id={session.id}, type={session.type}, "
                     f"group_id={session.group_id}, status={session.status}")
+
+        await notify_joint_session_invite(db, session, current_user_id)
 
         return session
 
@@ -196,6 +263,25 @@ async def end_session(
         background_tasks.add_task(process_session_end_background, session_id)
 
     return result
+
+
+@router.post("/{session_id}/join", response_model=SessionResponse)
+async def join_session(
+    session_id: str,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Join a scheduled joint session and activate the shared chat.
+    """
+    service = SessionService(db)
+    try:
+        session = service.join_session(session_id, current_user_id)
+    except ValueError as e:
+        raise _http_error_from_value_error(e)
+
+    await notify_partner_joined_session(db, session, current_user_id)
+    return session
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

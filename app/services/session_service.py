@@ -12,10 +12,18 @@ from app.services.checkin_service import CheckInService
 from app.services.therapist_notes_service import TherapistNotesService
 from app.utils.logger import get_logger
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 logger = get_logger(__name__)
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse frontend ISO datetimes into naive UTC for DB storage."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 class SessionService:
@@ -42,7 +50,8 @@ class SessionService:
         session_type: str,
         created_by: str,
         participants: List[str],
-        scheduled_for: str = None
+        scheduled_for: str = None,
+        invite_message: str = None
     ) -> SessionModel:
         """
         Create a new therapy session.
@@ -53,6 +62,7 @@ class SessionService:
             created_by: UUID of user creating the session
             participants: List of participant UUIDs
             scheduled_for: Optional ISO datetime string for scheduled sessions
+            invite_message: Optional message shown to the invited partner
 
         Returns:
             Created session object
@@ -66,7 +76,8 @@ class SessionService:
             participants=[uuid.UUID(p) for p in participants],
             current_context={},
             started_at=datetime.utcnow() if not scheduled_for else None,
-            scheduled_for=datetime.fromisoformat(scheduled_for) if scheduled_for else None,
+            scheduled_for=_parse_iso_datetime(scheduled_for) if scheduled_for else None,
+            invite_message=invite_message,
             created_at=datetime.utcnow()
         )
 
@@ -74,6 +85,39 @@ class SessionService:
         self.db.commit()
         self.db.refresh(session)
 
+        return session
+
+    def join_session(
+        self,
+        session_id: str,
+        user_id: str
+    ) -> SessionModel:
+        """
+        Mark a joint waiting-room session active when an invited participant joins.
+        """
+        session = self.db.query(SessionModel).filter(
+            SessionModel.id == uuid.UUID(session_id)
+        ).first()
+
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        participant = uuid.UUID(user_id)
+        if participant not in session.participants:
+            raise ValueError("Not authorized to join this session")
+
+        if session.type != 'joint':
+            raise ValueError("Only joint sessions can be joined")
+
+        if session.status in {'ending', 'pending_actions', 'concluded'}:
+            raise ValueError(f"Cannot join a session with status {session.status}")
+
+        if session.status != 'active':
+            session.status = 'active'
+            session.started_at = session.started_at or datetime.utcnow()
+
+        self.db.commit()
+        self.db.refresh(session)
         return session
 
     async def request_end_session(

@@ -27,6 +27,7 @@ class NotificationType:
     CHECK_IN_NEEDS_WORK = "check_in_needs_work"
     SESSION_END_REQUESTED = "session_end_requested"
     POST_SESSION_ACTIONS = "post_session_actions"
+    JOINT_SESSION_INVITE = "joint_session_invite"
     PARTNER_JOINED_SESSION = "partner_joined_session"
     SESSION_STARTED = "session_started"
 
