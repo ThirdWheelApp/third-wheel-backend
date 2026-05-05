@@ -258,7 +258,7 @@ Recent conversation:
 
 {state['sender_name']}: {state['user_input']}
 
-As the couples therapist, reply in a concise spoken turn. Acknowledge the live concern, name one pattern or emotion if useful, offer one concrete next move, and ask at most one simple question. Keep it 60-120 words. Do not use markdown formatting or long bullet lists unless the partners explicitly ask for a plan.
+As the couples therapist, reply in a concise spoken turn. Acknowledge the live concern, name one pattern or emotion if useful, offer one concrete next move, and ask at most one simple question. Keep it 60-120 words. Do not use markdown formatting or long bullet lists unless the partners explicitly ask for a plan. Do not write generic privacy-boundary filler; if you are constrained by privacy, still make a specific therapeutic move grounded only in the live transcript.
 
 Your response:"""
 

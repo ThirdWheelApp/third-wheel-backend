@@ -12,6 +12,8 @@ def test_joint_privacy_circuit_breaker_is_safe():
     )
 
     assert result.ok
+    assert "what has been named here" not in response.lower()
+    assert "one small truth" not in response.lower()
 
 
 def test_cheating_context_generates_safe_joint_guidance():
@@ -312,12 +314,91 @@ def test_joint_response_validator_blocks_said_to_me_source_claims():
     assert "response_contains_forbidden_private_language" in result.reasons
 
 
+def test_joint_response_validator_blocks_instead_of_asking_me_boundary_phrase():
+    result = PrivacyBoundaryService.validate_joint_response(
+        "Instead of asking me, turn to Alex and ask what happened.",
+        [],
+        joint_conversation_text="Jordan: Did Alex tell you anything?",
+    )
+
+    assert not result.ok
+    assert "response_contains_forbidden_private_language" in result.reasons
+
+
 def test_joint_response_validator_allows_redacted_guidance():
     result = PrivacyBoundaryService.validate_joint_response(
         "What would help each of you feel safer talking about trust, distance, and repair today?",
         ["User A cheated and feels guilty."],
     )
 
+    assert result.ok
+
+
+def test_joint_response_validator_allows_broad_process_terms_from_private_context():
+    result = PrivacyBoundaryService.validate_joint_response(
+        "The trust and hurt between you need a careful pace. What would help this feel safer today?",
+        ["User feels hurt and worried, and trust feels fragile around a private issue."],
+        joint_conversation_text="Jordan: I feel shut out and I don't know whether I can trust this.",
+    )
+
+    assert result.ok
+
+
+def test_source_specific_matching_ignores_ordinary_process_words():
+    matches = PrivacyBoundaryService.source_specific_matches(
+        "What does fair feel like, and what feels manageable today?",
+        ["User feels guilt and does not want a private issue revealed."],
+    )
+
+    assert matches == []
+
+
+def test_repair_reason_labels_do_not_expose_sensitive_categories():
+    from app.services.chat_service import ChatService
+
+    labels = ChatService._safe_repair_reason_labels([
+        "response_mentions_private_infidelity",
+        "response_mentions_private_source_specifics",
+    ])
+
+    assert "infidelity" not in " ".join(labels)
+    assert labels == [
+        "response_crossed_privacy_boundary",
+        "response_used_unintroduced_specifics",
+    ]
+
+
+def test_low_signal_joint_response_detection_flags_static_boundary_filler():
+    from app.services.chat_service import ChatService
+
+    assert ChatService._is_low_signal_joint_response(
+        "Let's stay with what has been named here instead of guessing or filling in blanks."
+    )
+    assert not ChatService._is_low_signal_joint_response(
+        "Jordan, the distance you named needs a concrete response. Ask Alex for one observable change this week."
+    )
+
+
+def test_source_seeking_boundary_response_uses_live_names_and_stays_safe():
+    from app.services.chat_service import ChatService
+
+    messages = [
+        {"sender_id": "a", "sender_name": "Sam", "content": "I feel shut out."},
+        {"sender_id": "b", "sender_name": "Riley", "content": "Did Sam tell you outside this room?"},
+    ]
+    response = ChatService._source_seeking_boundary_response(messages)
+    result = PrivacyBoundaryService.validate_joint_response(
+        response,
+        ["Sam has a gambling debt."],
+        joint_conversation_text="Riley: Did Sam tell you outside this room?",
+        joint_conversation_by_user={"a": "I feel shut out.", "b": "Did Sam tell you outside this room?"},
+        public_terms={"sam", "riley"},
+    )
+
+    assert "Riley" in response
+    assert "Sam" in response
+    assert "Alex" not in response
+    assert "Jordan" not in response
     assert result.ok
 
 
