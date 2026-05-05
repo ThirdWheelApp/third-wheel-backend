@@ -444,6 +444,9 @@ def test_low_signal_joint_response_detection_flags_static_boundary_filler():
     assert ChatService._is_low_signal_joint_response(
         "Let's stay with what has been named here instead of guessing or filling in blanks."
     )
+    assert ChatService._is_low_signal_joint_response(
+        "Let's continue without anyone needing to guess or fill in blanks."
+    )
     assert not ChatService._is_low_signal_joint_response(
         "Jordan, the distance you named needs a concrete response. Ask Alex for one observable change this week."
     )

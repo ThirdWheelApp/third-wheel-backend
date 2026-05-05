@@ -76,6 +76,7 @@ STYLE_FORBIDDEN_PATTERNS = [
     r"\*[^*]+\*",
     r"\bwhat has been named here\b",
     r"\bguessing or filling in blanks\b",
+    r"\bguess or fill in blanks\b",
     r"\bone small truth\b",
     r"\bwhat feels possible right now\b",
     r"\bwhat I'?m doing\b",

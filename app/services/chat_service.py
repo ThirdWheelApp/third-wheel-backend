@@ -870,6 +870,7 @@ class ChatService:
         low_signal_phrases = (
             "what has been named here",
             "guessing or filling in blanks",
+            "guess or fill in blanks",
             "one small truth",
             "what feels possible right now",
             "what is the next sentence that feels possible",

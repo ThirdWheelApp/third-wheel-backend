@@ -62,6 +62,7 @@ SOURCE_CLAIM_TERMS = [
 CIRCUIT_BREAKER_TERMS = [
     "what has been named here",
     "guessing or filling in blanks",
+    "guess or fill in blanks",
     "one small truth",
     "what feels possible right now",
 ]
