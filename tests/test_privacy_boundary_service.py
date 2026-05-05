@@ -388,6 +388,56 @@ def test_privacy_guard_context_filter_keeps_sensitive_memory_only():
     }) is True
 
 
+def test_semantic_privacy_arbiter_only_runs_for_source_specific_overlap():
+    from app.services.chat_service import ChatService
+
+    assert ChatService._privacy_failure_is_source_specific_only([
+        "response_mentions_private_source_specifics",
+    ])
+    assert not ChatService._privacy_failure_is_source_specific_only([
+        "response_mentions_private_source_specifics",
+        "response_contains_forbidden_private_language",
+    ])
+
+
+def test_semantic_privacy_arbiter_can_allow_broad_process_language():
+    from app.services.chat_service import ChatService
+
+    class FakeContent:
+        text = '{"safe": true, "reason": "broad process language only"}'
+
+    class FakeMessage:
+        content = [FakeContent()]
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            return FakeMessage()
+
+    class FakeClient:
+        def __init__(self):
+            self.messages = FakeMessages()
+
+    service = object.__new__(ChatService)
+    service.client = FakeClient()
+    allowed = service._semantic_privacy_arbiter_allows(
+        response_text="Trust feels fragile, so name one thing that would help you feel safer.",
+        privacy_reasons=["response_mentions_private_source_specifics"],
+        private_contexts=[{
+            "subject_user_id": "alex-id",
+            "data": {
+                "text": "Alex has a private high-sensitivity issue affecting trust.",
+                "secret_level": 9,
+            },
+        }],
+        joint_conversation_text="Jordan: I feel distance and trust feels fragile.",
+        joint_conversation_by_user={"jordan-id": "I feel distance and trust feels fragile."},
+    )
+
+    assert allowed is True
+    assert "Private-only source contexts" in service.client.messages.kwargs["messages"][0]["content"]
+
+
 def test_low_signal_joint_response_detection_flags_static_boundary_filler():
     from app.services.chat_service import ChatService
 

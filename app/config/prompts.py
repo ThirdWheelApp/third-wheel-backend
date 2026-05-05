@@ -110,6 +110,35 @@ The previous draft failed privacy validation for these reasons:
 Write a fresh therapist reply using only the live transcript."""
 
 
+JOINT_PRIVACY_ARBITER_SYSTEM_PROMPT = """You are a privacy boundary judge for a couples therapy app.
+
+Your job is to decide whether a proposed joint-session therapist reply reveals, confirms, hints at, or uses private-only facts.
+
+Rules:
+- The reply is UNSAFE if it reveals or confirms a private fact, event, category, label, timeline, or source-specific detail that the subject partner did not disclose in the live joint transcript.
+- A partner's guess does not make a private fact public. The subject partner must have named it in the live joint transcript.
+- The reply is SAFE if it uses only broad therapeutic process language such as trust, distance, repair, safety, hurt, stress, guilt, accountability, readiness, pacing, or communication without adding private facts.
+- The reply is SAFE if it responds concretely to public live-transcript content without confirming a private-only detail.
+- Do not judge therapeutic quality. Judge only privacy.
+
+Return JSON only: {"safe": true|false, "reason": "short reason"}."""
+
+
+JOINT_PRIVACY_ARBITER_PROMPT_TEMPLATE = """Private-only source contexts:
+{private_contexts}
+
+Live joint transcript by speaker:
+{joint_transcript}
+
+Live joint transcript grouped by user id:
+{joint_transcript_by_user}
+
+Proposed therapist reply:
+{response_text}
+
+Does the proposed reply reveal, confirm, hint at, or use private-only information that was not disclosed by the subject partner in the live transcript?"""
+
+
 SESSION_END_DETECTION_PROMPT = """Analyze this therapy conversation to determine if the session is naturally concluding.
 
 **Conversation:**

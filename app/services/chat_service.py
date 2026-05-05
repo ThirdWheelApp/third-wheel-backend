@@ -18,6 +18,8 @@ from app.agents.private_agent.repo import PrivateAgentRepository
 from app.agents.joint_agent.agent import JointAgent
 from app.agents.joint_agent.repo import JointAgentRepository
 from app.config.prompts import (
+    JOINT_PRIVACY_ARBITER_PROMPT_TEMPLATE,
+    JOINT_PRIVACY_ARBITER_SYSTEM_PROMPT,
     JOINT_RESPONSE_REPAIR_PROMPT_TEMPLATE,
     JOINT_RESPONSE_REPAIR_SYSTEM_PROMPT,
     TASK_PROPOSAL_EXTRACTION_PROMPT_TEMPLATE,
@@ -29,11 +31,12 @@ from app.demo.mock_llm import get_llm_client
 from app.services.checkin_service import CheckInService
 from app.services.context_service import extract_json_from_response
 from app.services.therapist_notes_service import TherapistNotesService
-from app.services.privacy_boundary_service import PrivacyBoundaryService
+from app.services.privacy_boundary_service import PrivacyBoundaryService, PrivacyValidationResult
 from app.utils.logger import get_logger
 from typing import Dict, Optional, AsyncIterator, AsyncGenerator, Callable, Awaitable, List
 import uuid
 from datetime import datetime
+import json
 import re
 import time
 
@@ -451,6 +454,15 @@ class ChatService:
             joint_conversation_by_user=joint_conversation_by_user,
             public_terms=public_terms
         )
+        if self._semantic_privacy_arbiter_allows(
+            response_text=response_text,
+            privacy_reasons=privacy_check.reasons,
+            private_contexts=private_contexts_for_guard,
+            joint_conversation_text=joint_conversation_text,
+            joint_conversation_by_user=joint_conversation_by_user,
+        ):
+            privacy_check = PrivacyValidationResult(ok=True, reasons=[])
+
         if not privacy_check.ok:
             logger.warning(
                 f"Joint response failed privacy validation ({privacy_check.reasons}); repairing response."
@@ -482,6 +494,14 @@ class ChatService:
                     joint_conversation_by_user=joint_conversation_by_user,
                     public_terms=public_terms
                 )
+                if self._semantic_privacy_arbiter_allows(
+                    response_text=candidate,
+                    privacy_reasons=repair_check.reasons,
+                    private_contexts=private_contexts_for_guard,
+                    joint_conversation_text=joint_conversation_text,
+                    joint_conversation_by_user=joint_conversation_by_user,
+                ):
+                    repair_check = PrivacyValidationResult(ok=True, reasons=[])
                 if self._is_circuit_breaker_response(candidate) or self._is_low_signal_joint_response(candidate):
                     repair_reasons = repair_check.reasons or ["repair_returned_low_signal_response"]
                     continue
@@ -683,6 +703,64 @@ class ChatService:
             raise ValueError(f"Session {session.id} is not a {expected_type} session")
         if session.type == "joint" and not session.group_id:
             raise ValueError("Joint sessions require a group_id")
+
+    @staticmethod
+    def _privacy_failure_is_source_specific_only(reasons: List[str]) -> bool:
+        return bool(reasons) and set(reasons) == {"response_mentions_private_source_specifics"}
+
+    def _semantic_privacy_arbiter_allows(
+        self,
+        response_text: str,
+        privacy_reasons: List[str],
+        private_contexts: List[Dict],
+        joint_conversation_text: str,
+        joint_conversation_by_user: Dict[str, str],
+    ) -> bool:
+        """
+        Resolve lexical source-specific false positives with a semantic judge.
+
+        The lexical guard is intentionally conservative. When its only concern
+        is source-specific overlap, a small LLM arbiter can distinguish broad
+        therapy language from actual private fact leakage.
+        """
+        if not self._privacy_failure_is_source_specific_only(privacy_reasons):
+            return False
+        if not response_text or not private_contexts:
+            return False
+
+        private_payload = []
+        for context in private_contexts[:20]:
+            data = context.get("data") if isinstance(context.get("data"), dict) else context
+            private_payload.append({
+                "subject_user_id": context.get("subject_user_id"),
+                "text": (data or {}).get("text", ""),
+                "tags": (data or {}).get("tags", []),
+                "category": (data or {}).get("category", ""),
+            })
+
+        prompt = JOINT_PRIVACY_ARBITER_PROMPT_TEMPLATE.format(
+            private_contexts=json.dumps(private_payload, indent=2),
+            joint_transcript=joint_conversation_text,
+            joint_transcript_by_user=json.dumps(joint_conversation_by_user, indent=2),
+            response_text=response_text,
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=settings.LLM_MODEL,
+                max_tokens=200,
+                temperature=0,
+                system=JOINT_PRIVACY_ARBITER_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            payload = extract_json_from_response(response.content[0].text) or {}
+            allowed = payload.get("safe") is True
+            if allowed:
+                logger.info("Semantic privacy arbiter allowed source-specific lexical overlap.")
+            return allowed
+        except Exception as e:
+            logger.warning(f"Semantic privacy arbiter failed closed: {e}")
+            return False
 
     def _repair_joint_response(
         self,
