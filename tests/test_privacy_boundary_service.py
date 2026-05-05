@@ -368,6 +368,26 @@ def test_repair_reason_labels_do_not_expose_sensitive_categories():
     ]
 
 
+def test_privacy_guard_context_filter_keeps_sensitive_memory_only():
+    from app.services.chat_service import ChatService
+
+    assert ChatService._should_guard_private_context({
+        "text": "User likes direct check-ins after conflict.",
+        "secret_level": 2,
+        "tags": ["communication"],
+    }) is False
+    assert ChatService._should_guard_private_context({
+        "text": "User cheated and is afraid to disclose it.",
+        "secret_level": 5,
+        "tags": ["trust"],
+    }) is True
+    assert ChatService._should_guard_private_context({
+        "text": "User is carrying a major undisclosed concern.",
+        "secret_level": 9,
+        "tags": ["privacy"],
+    }) is True
+
+
 def test_low_signal_joint_response_detection_flags_static_boundary_filler():
     from app.services.chat_service import ChatService
 

@@ -442,7 +442,7 @@ class ChatService:
             for ctx in self.db.query(PrivateUserContext).filter(
                 PrivateUserContext.group_id == session.group_id
             ).all()
-            if ctx.data
+            if ctx.data and self._should_guard_private_context(ctx.data)
         ]
         privacy_check = PrivacyBoundaryService.validate_joint_response(
             response_text,
@@ -742,6 +742,31 @@ class ChatService:
                 safe_labels.append("response_crossed_privacy_boundary")
 
         return list(dict.fromkeys(safe_labels or ["response_crossed_privacy_boundary"]))
+
+    @staticmethod
+    def _should_guard_private_context(context_data: Dict) -> bool:
+        """
+        Use the expensive lexical privacy backstop only for sensitive private
+        memory. Low-sensitivity private context often contains ordinary therapy
+        language; comparing every generated reply against every low-level word
+        creates false positives and causes generic fallback responses.
+        """
+        if not context_data:
+            return False
+
+        try:
+            secret_level = int(context_data.get("secret_level", 0) or 0)
+        except (TypeError, ValueError):
+            secret_level = 0
+        if secret_level >= 7:
+            return True
+
+        searchable = " ".join([
+            str(context_data.get("text") or ""),
+            str(context_data.get("category") or ""),
+            " ".join(str(tag) for tag in (context_data.get("tags") or [])),
+        ])
+        return bool(PrivacyBoundaryService.detect_sensitive_topics([searchable]))
 
     @staticmethod
     def _joint_privacy_circuit_breaker_response() -> str:
