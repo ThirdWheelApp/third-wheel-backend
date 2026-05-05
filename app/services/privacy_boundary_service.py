@@ -33,19 +33,19 @@ SAFE_PROCESS_TERMS = {
     "courage", "defensiveness", "details", "direct", "directly", "disclose",
     "disclosed", "disclosure", "distance", "emotional", "emotion",
     "emotions", "experience", "experiencing", "feel", "feeling", "feelings", "feels",
-    "felt", "guilt", "guilty", "fear", "fears", "hard", "heard", "help",
+    "felt", "guilt", "guilty", "fear", "fears", "fragile", "hard", "heard", "help",
     "helpful", "helping", "honest", "honesty", "hurt", "hurting",
     "intimacy", "openness", "pace", "pacing", "pattern", "patterns",
     "pain", "painful", "present", "ready", "readiness", "repair", "room",
     "safe", "safety", "scared",
     "secure", "security", "share", "shared", "sharing", "slow", "slowly",
-    "support", "tension", "transparency", "trust", "truth", "truthful",
+    "stress", "stressed", "support", "tension", "transparency", "trust", "truth", "truthful",
     "uncertain", "uncertainty", "understand", "understanding", "values",
     "vulnerable", "vulnerability", "willing", "worry", "worried", "work",
     "working",
 }
 
-SHORT_SOURCE_SPECIFIC_TERMS = {"sex", "std", "sti", "hiv", "ivf", "gay"}
+SHORT_SOURCE_SPECIFIC_TERMS = {"bank", "sex", "std", "sti", "hiv", "ivf", "gay"}
 
 SAFE_GUIDANCE_TOPICS = {
     "accountability_capacity",
@@ -292,7 +292,7 @@ class PrivacyBoundaryService:
     def _is_source_specific_word(word: str) -> bool:
         if word in SHORT_SOURCE_SPECIFIC_TERMS:
             return True
-        if len(word) < 4:
+        if len(word) < 6:
             return False
         if word in STOPWORDS or word in SAFE_PROCESS_TERMS:
             return False
