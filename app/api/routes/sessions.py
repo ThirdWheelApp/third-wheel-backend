@@ -11,6 +11,7 @@ from app.services.notification_service import NotificationService, NotificationT
 from app.schemas.schemas import SessionCreate, SessionResponse
 from app.utils.auth import get_current_user
 from app.utils.logger import get_logger
+from app.websocket.manager import manager
 from typing import List
 import asyncio
 import uuid
@@ -261,6 +262,16 @@ async def end_session(
 
     if result.get("post_processing_required"):
         background_tasks.add_task(process_session_end_background, session_id)
+
+    await manager.broadcast(
+        session_id,
+        {
+            "type": "sessionStatus",
+            "sessionId": session_id,
+            "status": result.get("status"),
+            "endedAt": result.get("ended_at"),
+        },
+    )
 
     return result
 

@@ -146,12 +146,13 @@ class JointAgent:
             # Run the LangGraph workflow
             logger.info("[JointAgent] Executing LangGraph workflow...")
 
-            # LangGraph workflows can be async or sync
-            # We need to handle both cases
-            if asyncio.iscoroutinefunction(graph.ainvoke if hasattr(graph, 'ainvoke') else None):
+            # Prefer LangGraph's async path because this graph can route
+            # through async private-agent nodes when private context is needed.
+            if hasattr(graph, "ainvoke"):
                 final_state = await graph.ainvoke(initial_state)
             else:
-                final_state = graph.invoke(initial_state)
+                maybe_state = graph.invoke(initial_state)
+                final_state = await maybe_state if asyncio.iscoroutine(maybe_state) else maybe_state
 
             logger.info(
                 f"[JointAgent] Workflow complete. Response: {len(final_state['response_text'])} chars, "
@@ -205,7 +206,7 @@ class JointAgent:
             }
 
             return (
-                "I apologize, I'm having trouble processing that right now. Could we try rephrasing?",
+                "I'm having trouble reaching the therapist model right now. Your message was received, but I can't give a thoughtful response until the connection is back. Please try again in a moment.",
                 False,
                 accumulated_context or {'private_a_context': [], 'private_b_context': []}
             )

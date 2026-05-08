@@ -188,6 +188,26 @@ class ChatHandler:
                 )
                 return
 
+            if session.status != 'active':
+                await manager.broadcast(
+                    session_id,
+                    {
+                        'type': 'sessionStatus',
+                        'sessionId': session_id,
+                        'status': session.status,
+                        'endedAt': session.ended_at.isoformat() if session.ended_at else None,
+                    }
+                )
+                await manager.broadcast(
+                    session_id,
+                    {
+                        'type': 'typing',
+                        'userId': 'therapist',
+                        'isTyping': False
+                    }
+                )
+                return
+
             # Handle streaming for private sessions
             if session.type == 'private' and use_streaming:
                 await self._process_streaming_message(
@@ -371,6 +391,7 @@ class ChatHandler:
             sync_message = {
                 'type': 'sync',
                 'sessionStatus': session.status,
+                'endedAt': session.ended_at.isoformat() if session.ended_at else None,
                 'messages': [
                     {
                         'messageId': str(m.id),

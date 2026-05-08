@@ -67,6 +67,9 @@ class SessionService:
         Returns:
             Created session object
         """
+        if session_type == 'joint' and group_id:
+            self._close_open_joint_sessions(group_id)
+
         session = SessionModel(
             id=uuid.uuid4(),
             group_id=uuid.UUID(group_id) if group_id else None,  # Optional for private sessions
@@ -86,6 +89,28 @@ class SessionService:
         self.db.refresh(session)
 
         return session
+
+    def _close_open_joint_sessions(self, group_id: str) -> int:
+        """
+        Keep a relationship to one current joint session.
+
+        Older active/scheduled joint sessions can be left behind when clients
+        disconnect or a previous deploy failed. They should not continue to
+        surface as rejoinable once a new joint session is started.
+        """
+        now = datetime.utcnow()
+        open_sessions = self.db.query(SessionModel).filter(
+            SessionModel.group_id == uuid.UUID(group_id),
+            SessionModel.type == 'joint',
+            SessionModel.status.in_(['active', 'scheduled', 'pending_conclusion'])
+        ).all()
+
+        for existing in open_sessions:
+            existing.status = 'concluded'
+            if not existing.ended_at:
+                existing.ended_at = now
+
+        return len(open_sessions)
 
     def join_session(
         self,
@@ -196,6 +221,7 @@ class SessionService:
             return {
                 'session_id': str(session.id),
                 'status': session.status,
+                'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                 'contexts_extracted': 0,
                 'check_ins_proposed': 0,
                 'post_processing_required': False
@@ -211,6 +237,7 @@ class SessionService:
             return {
                 'session_id': str(session.id),
                 'status': session.status,
+                'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                 'contexts_extracted': 0,
                 'check_ins_proposed': 0,
                 'post_processing_required': True
@@ -237,6 +264,7 @@ class SessionService:
             return {
                 'session_id': str(session.id),
                 'status': session.status,
+                'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                 'contexts_extracted': 0,
                 'check_ins_proposed': 0,
                 'post_processing_required': False
@@ -268,6 +296,7 @@ class SessionService:
                 return {
                     'session_id': str(session.id),
                     'status': session.status,
+                    'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                     'contexts_extracted': 0,
                     'check_ins_proposed': 0,
                     'post_processing_required': False
@@ -309,6 +338,7 @@ class SessionService:
             return {
                 'session_id': str(session.id),
                 'status': session.status,
+                'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                 'contexts_extracted': len(extracted_data.get('user_a_contexts', [])) +
                                      len(extracted_data.get('user_b_contexts', [])) +
                                      len(extracted_data.get('group_contexts', [])),
@@ -350,6 +380,7 @@ class SessionService:
             return {
                 'session_id': str(session.id),
                 'status': session.status,
+                'ended_at': session.ended_at.isoformat() if session.ended_at else None,
                 'contexts_extracted': 0,
                 'check_ins_proposed': 0,
                 'post_processing_required': False,

@@ -284,7 +284,11 @@ Your response:"""
         except Exception as e:
             logger.error(f"[JointAgent] Error generating response: {e}", exc_info=True)
             state['error'] = str(e)
-            state['response_text'] = "I apologize, I'm having trouble processing that. Could we try rephrasing?"
+            state['response_text'] = (
+                "I'm having trouble reaching the therapist model right now. "
+                "Your message was received, but I can't give a thoughtful "
+                "response until the connection is back. Please try again in a moment."
+            )
             return state
 
     # Node 4: Check if session should end (LLM-based detection)

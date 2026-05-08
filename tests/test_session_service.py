@@ -84,6 +84,66 @@ def test_end_session_can_return_before_relationship_processing(db_session, monke
     assert private_session.ended_at is not None
 
 
+def test_creating_joint_session_closes_previous_open_joint_sessions(db_session):
+    alex = User(
+        id=uuid.uuid4(),
+        email="alex-joint-open@example.com",
+        name="Alex Joint",
+    )
+    jordan = User(
+        id=uuid.uuid4(),
+        email="jordan-joint-open@example.com",
+        name="Jordan Joint",
+    )
+    db_session.add_all([alex, jordan])
+    db_session.commit()
+
+    group = Group(
+        id=uuid.uuid4(),
+        partner1_id=alex.id,
+        partner2_id=jordan.id,
+        partner2_email=jordan.email,
+        status="active",
+    )
+    db_session.add(group)
+    db_session.commit()
+
+    stale_active = Session(
+        id=uuid.uuid4(),
+        group_id=group.id,
+        type="joint",
+        status="active",
+        created_by=alex.id,
+        participants=[alex.id, jordan.id],
+    )
+    stale_scheduled = Session(
+        id=uuid.uuid4(),
+        group_id=group.id,
+        type="joint",
+        status="scheduled",
+        created_by=alex.id,
+        participants=[alex.id, jordan.id],
+    )
+    db_session.add_all([stale_active, stale_scheduled])
+    db_session.commit()
+
+    new_session = SessionService(db_session).create_session(
+        group_id=str(group.id),
+        session_type="joint",
+        created_by=str(alex.id),
+        participants=[str(alex.id), str(jordan.id)],
+        scheduled_for=None,
+    )
+
+    db_session.refresh(stale_active)
+    db_session.refresh(stale_scheduled)
+    assert stale_active.status == "concluded"
+    assert stale_scheduled.status == "concluded"
+    assert stale_active.ended_at is not None
+    assert stale_scheduled.ended_at is not None
+    assert new_session.status == "active"
+
+
 def test_process_ended_private_session_concludes_after_extraction(db_session, monkeypatch):
     user = User(
         id=uuid.uuid4(),
